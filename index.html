@@ -1,1 +1,487 @@
-# offiziellzombeii.github.io
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>F1 25 Liga</title>
+  <meta name="description" content="Offizielle Website der F1 25 Liga – Rennen, Ergebnisse, Teams, Discord & FAQ." />
+  <meta name="color-scheme" content="dark light" />
+  <style>
+    :root{
+      --bg: #0b0d10;
+      --bg-2: #0f1216;
+      --card: #11151b;
+      --text: #e7edf5;
+      --muted:#99a3b3;
+      --primary:#00e676;
+      --accent:#26a0ff;
+      --danger:#ff5a7a;
+      --warning:#ffcc00;
+      --radius: 16px;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Noto Sans, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background: radial-gradient(1200px 800px at 80% -10%, #0f1722 0%, var(--bg) 60%) fixed;
+      color:var(--text);
+    }
+    a{color:var(--accent); text-decoration:none}
+    a:hover{text-decoration:underline}
+
+    /* Topbar */
+    header{
+      position:sticky; top:0; z-index:50; backdrop-filter: blur(8px);
+      background: color-mix(in oklab, var(--bg) 92%, transparent);
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .container{max-width:1100px; margin:0 auto; padding:0 16px}
+    .topbar{display:flex; align-items:center; gap:16px; padding:14px 0}
+    .brand{display:flex; align-items:center; gap:12px; font-weight:800; letter-spacing:.5px}
+    .brand .logo{width:34px; height:34px; border-radius:10px; background:
+      conic-gradient(from 210deg, var(--primary), var(--accent), var(--warning));
+      box-shadow:0 0 30px -10px var(--accent);
+    }
+    nav{margin-left:auto; display:flex; gap:6px; flex-wrap:wrap}
+    .tab{--c:var(--muted); color:var(--c); border:1px solid rgba(255,255,255,.08); background:var(--bg-2);
+      padding:10px 14px; border-radius:999px; cursor:pointer; transition:.2s ease; font-weight:600}
+    .tab:hover{transform:translateY(-1px); border-color: rgba(255,255,255,.18); color:var(--text)}
+    .tab.active{--c:var(--text); background:linear-gradient(90deg, rgba(255,255,255,.05), rgba(255,255,255,.02)); border-color:rgba(255,255,255,.18)}
+
+    /* Hero */
+    .hero{display:grid; grid-template-columns:1.2fr .8fr; gap:22px; padding:28px 0 8px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01)); border:1px solid rgba(255,255,255,.08);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .card-inner{padding:18px}
+    h1{font-size: clamp(28px, 3.6vw, 44px); margin:0 0 8px; line-height:1.1}
+    .lead{color:var(--muted); margin:0}
+    .metrics{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:14px}
+    .metric{background:var(--card); border:1px solid rgba(255,255,255,.06); border-radius:14px; padding:12px}
+    .metric .kpi{font-weight:800; font-size:22px}
+    .badge{display:inline-flex; align-items:center; gap:8px; font-weight:700; color:var(--bg);
+      background: linear-gradient(90deg, var(--primary), #25d6ff); padding:6px 10px; border-radius:999px}
+
+    /* Views */
+    main{padding:18px 0 60px}
+    .view{display:none}
+    .view.active{display:block}
+
+    /* Race list */
+    .toolbar{display:flex; align-items:center; gap:10px; margin-bottom:12px}
+    .pill{border:1px solid rgba(255,255,255,.08); background:var(--bg-2); border-radius:999px; padding:8px 12px; cursor:pointer; font-weight:600; color:var(--muted)}
+    .pill.active{background:linear-gradient(90deg, rgba(255,255,255,.05), rgba(255,255,255,.02)); color:var(--text)}
+
+    .grid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px}
+    @media (max-width: 960px){ .hero{grid-template-columns:1fr} .grid{grid-template-columns:repeat(2,1fr)} }
+    @media (max-width: 640px){ .grid{grid-template-columns:1fr} }
+
+    .race{position:relative; overflow:hidden}
+    .race .img{height:110px; background:
+      linear-gradient(90deg, rgba(255,255,255,.04), rgba(255,255,255,.02)),
+      radial-gradient(600px 160px at 30% 20%, rgba(38,160,255,.15), transparent 60%),
+      radial-gradient(500px 160px at 80% 10%, rgba(0,230,118,.16), transparent 60%),
+      #0c0f14; border-bottom:1px solid rgba(255,255,255,.06)
+    }
+    .race .flag{position:absolute; top:12px; right:12px; font-size:12px; padding:4px 8px; border-radius:999px; background:rgba(255,255,255,.08)}
+    .race h3{margin:10px 0 2px}
+    .race .meta{color:var(--muted); font-size:13px}
+    .race .tags{margin-top:8px; display:flex; gap:6px; flex-wrap:wrap}
+    .tag{font-size:12px; padding:4px 8px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.08)}
+    .race button{margin-top:10px; width:100%; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.10); background:linear-gradient(90deg, rgba(255,255,255,.05), rgba(255,255,255,.02)); color:var(--text); font-weight:700; cursor:pointer}
+    .race button:hover{transform:translateY(-1px)}
+
+    /* Race detail */
+    dialog{border:none; border-radius:18px; padding:0; background:var(--bg); color:var(--text); width:min(880px, 96vw)}
+    dialog::backdrop{backdrop-filter: blur(1px) brightness(.7)}
+    .detail-head{display:flex; align-items:center; justify-content:space-between; padding:16px 18px; border-bottom:1px solid rgba(255,255,255,.08)}
+    .detail-body{padding:14px 18px}
+    .detail-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+    @media (max-width:720px){ .detail-grid{grid-template-columns:1fr} }
+    table{width:100%; border-collapse:collapse}
+    th,td{padding:10px; border-bottom:1px solid rgba(255,255,255,.06); text-align:left}
+    th{color:var(--muted); font-weight:600}
+    .chip{display:inline-flex; align-items:center; gap:8px; font-size:13px; padding:6px 10px; border-radius:999px; border:1px solid rgba(255,255,255,.10)}
+
+    /* Teams */
+    .team{display:flex; gap:12px; align-items:center; padding:12px; background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:14px}
+    .color{width:14px; height:54px; border-radius:10px}
+    .drivers{color:var(--muted)}
+
+    /* Discord */
+    .discord-embed{border:0; width:100%; height:480px; border-radius: 14px}
+
+    /* FAQ */
+    details{background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:12px}
+    details+details{margin-top:10px}
+    summary{cursor:pointer; font-weight:700}
+
+    /* Footer */
+    footer{color:var(--muted); border-top:1px solid rgba(255,255,255,.08); padding:22px 0 60px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container topbar">
+      <div class="brand" role="banner">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <div style="font-size:18px">F1 25 Liga</div>
+          <div class="badge" title="Season/Year"><span>Season 2025</span></div>
+        </div>
+      </div>
+      <nav aria-label="Hauptnavigation">
+        <button class="tab active" data-route="#/home">Home</button>
+        <button class="tab" data-route="#/races">Rennen</button>
+        <button class="tab" data-route="#/teams">Team</button>
+        <button class="tab" data-route="#/discord">Discord</button>
+        <button class="tab" data-route="#/faq">FAQ</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- HERO -->
+    <section class="hero">
+      <div class="card">
+        <div class="card-inner">
+          <h1>Willkommen zur <span style="color:var(--primary)">F1 25</span> Liga</h1>
+          <p class="lead">Alle Infos zu Terminen, Ergebnissen, Teams und Regeln – zentral an einem Ort. Bereit für Rad-an-Rad-Action?</p>
+          <div class="metrics" id="kpis"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-inner">
+          <div style="display:flex; justify-content:space-between; align-items:center"><h2 style="margin:0">Nächstes Event</h2><span class="chip" id="countdown">–</span></div>
+          <div id="next-event" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEWS -->
+    <section id="view-home" class="view active"></section>
+    <section id="view-races" class="view"></section>
+    <section id="view-teams" class="view"></section>
+    <section id="view-discord" class="view"></section>
+    <section id="view-faq" class="view"></section>
+
+    <dialog id="race-dialog"></dialog>
+  </main>
+
+  <footer class="container">
+    © <span id="year"></span> F1 25 Liga • Hosted on GitHub Pages • <a href="#/faq">Impressum & Regeln</a>
+  </footer>
+
+  <script>
+  // ======= DATA (Edit me!) ===================================================
+  const LEAGUE = {
+    name: "F1 25 Liga",
+    season: 2025,
+    timezone: "Europe/Berlin",
+    discordInvite: "https://discord.gg/YOUR_INVITE",
+    // Race calendar (sample) – edit ids/dates/track names
+    races: [
+      { id:"bah", round:1, name:"Bahrain Grand Prix", circuit:"Sakhir", country:"Bahrain", date:"2025-03-16T19:00:00+03:00", laps:57, drsZones:3 },
+      { id:"jed", round:2, name:"Saudi Arabian Grand Prix", circuit:"Jeddah Corniche", country:"Saudi-Arabien", date:"2025-03-23T20:00:00+03:00", laps:50, drsZones:3 },
+      { id:"aus", round:3, name:"Australian Grand Prix", circuit:"Albert Park", country:"Australien", date:"2025-04-06T15:00:00+10:00", laps:58, drsZones:4 },
+      { id:"chn", round:4, name:"Chinese Grand Prix", circuit:"Shanghai", country:"China", date:"2025-04-20T15:00:00+08:00", laps:56, drsZones:2 },
+      { id:"mia", round:5, name:"Miami Grand Prix", circuit:"Miami", country:"USA", date:"2025-05-04T15:30:00-04:00", laps:57, drsZones:2 },
+      { id:"imola", round:6, name:"Emilia Romagna GP", circuit:"Imola", country:"Italien", date:"2025-05-18T15:00:00+02:00", laps:63, drsZones:1 },
+      { id:"rbr", round:6, name:"", circuit:"Red Bull Ring", country:"Österreich", date:"2025-08-25T15:00:00+02:00", laps:63, drsZones:1 },
+    ],
+    // Results (example format) – add after races are done
+    results: {
+      // key by race id
+      bah: [
+        { pos:1, driver:"Max Verstappen", team:"Red Bull", time:"1:31:22.123" },
+        { pos:2, driver:"Charles Leclerc", team:"Ferrari", time:"+7.201" },
+        { pos:3, driver:"Lando Norris", team:"McLaren", time:"+12.884" },
+      ]
+    },
+    teams: [
+      { name:"Red Rocket Racing", color:"#e10600", drivers:["A. Müller (#7)","B. Schmitt (#28)"] },
+      { name:"Azure Arrow", color:"#00a3e0", drivers:["C. Weber (#10)","D. König (#77)"] },
+      { name:"Neon Apex", color:"#00e676", drivers:["E. Kaiser (#22)","F. Vogel (#88)"] },
+    ],
+    faq: [
+      { q:"Welche Assistenz-Einstellungen sind erlaubt?", a:"Linienhilfe: EIN (Kurven), ABS: EIN, Traktionskontrolle: MITTEL, Getriebe: Manuell oder Automatik – alles weitere bitte im Discord-Regelwerk prüfen." },
+      { q:"Wie melde ich mich für die Liga an?", a:"Tritt unserem Discord bei und bestätige dich im Channel #anmeldung. Die Admins schalten dich frei und weisen dir ein Team zu." },
+      { q:"Was passiert bei Disconnects?", a:"Bei frühzeitigem Disconnect gibt es einen Neustart, wenn >30% des Feldes betroffen ist. Sonst zählt das Ergebnis zum Zeitpunkt des Abbruchs." },
+    ]
+  };
+
+  // ======= Utilities =========================================================
+  const $ = sel => document.querySelector(sel);
+  const $$ = sel => Array.from(document.querySelectorAll(sel));
+  const formatDate = iso => new Date(iso).toLocaleString(undefined, { dateStyle:'full', timeStyle:'short' });
+  const now = () => new Date();
+  const byDate = (a,b)=> new Date(a.date) - new Date(b.date);
+
+  // Simple hash router
+  function route(){
+    const h = location.hash || '#/home';
+    $$('.tab').forEach(t=> t.classList.toggle('active', t.dataset.route===h));
+    $$('.view').forEach(v=> v.classList.remove('active'));
+    if(h.startsWith('#/races')){ renderRaces(); $('#view-races').classList.add('active'); }
+    else if(h.startsWith('#/teams')){ renderTeams(); $('#view-teams').classList.add('active'); }
+    else if(h.startsWith('#/discord')){ renderDiscord(); $('#view-discord').classList.add('active'); }
+    else if(h.startsWith('#/faq')){ renderFAQ(); $('#view-faq').classList.add('active'); }
+    else { renderHome(); $('#view-home').classList.add('active'); }
+  }
+
+  // ======= Home ==============================================================
+  function renderHome(){
+    const past = LEAGUE.races.filter(r=> new Date(r.date) < now()).sort(byDate);
+    const upcoming = LEAGUE.races.filter(r=> new Date(r.date) >= now()).sort(byDate);
+
+    // KPIs
+    const kpis = [
+      { label:'Rennen insgesamt', value: LEAGUE.races.length },
+      { label:'Gefahren', value: past.length },
+      { label:'Bevorstehend', value: upcoming.length }
+    ];
+    $('#kpis').innerHTML = kpis.map(k=>`<div class="metric"><div class="kpi">${k.value}</div><div class="muted">${k.label}</div></div>`).join('');
+
+    // Next event card
+    const n = upcoming[0];
+    if(n){
+      $('#next-event').innerHTML = `
+        <div class="team">
+          <div class="color" style="background:linear-gradient( to bottom right, var(--primary), var(--accent))"></div>
+          <div style="flex:1">
+            <div style="font-weight:800; font-size:18px">Runde ${n.round}: ${n.name}</div>
+            <div class="drivers">${n.circuit} • ${n.country} • ${formatDate(n.date)}</div>
+            <div style="margin-top:8px" class="tags">
+              <span class="tag">${n.laps} Runden</span>
+              <span class="tag">${n.drsZones} DRS-Zonen</span>
+            </div>
+            <div style="margin-top:10px"><a class="chip" href="#/races" aria-label="Gehe zu Rennen">Zum Rennkalender →</a></div>
+          </div>
+        </div>`;
+      startCountdown(n.date);
+    } else {
+      $('#next-event').textContent = 'Saison abgeschlossen – GG!';
+      $('#countdown').textContent = '—';
+    }
+
+    $('#view-home').innerHTML = '';// nothing else, hero already on page
+  }
+
+  function startCountdown(targetISO){
+    const tgt = new Date(targetISO).getTime();
+    const el = $('#countdown');
+    clearInterval(window.__cd);
+    window.__cd = setInterval(()=>{
+      const diff = Math.max(0, tgt - Date.now());
+      const d = Math.floor(diff/86400000);
+      const h = Math.floor(diff%86400000/3600000);
+      const m = Math.floor(diff%3600000/60000);
+      const s = Math.floor(diff%60000/1000);
+      el.textContent = diff>0 ? `Start in ${d}d ${h}h ${m}m ${s}s` : 'GRÜNES LICHT!';
+    }, 1000);
+  }
+
+  // ======= Races =============================================================
+  function renderRaces(){
+    const wrap = $('#view-races');
+    wrap.innerHTML = '';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'toolbar';
+    toolbar.innerHTML = `
+      <button class="pill" data-filter="all">Alle</button>
+      <button class="pill" data-filter="upcoming">Bevorstehend</button>
+      <button class="pill" data-filter="past">Vergangen</button>
+      <input id="search" placeholder="Suche nach Strecke/Land…" style="margin-left:auto; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.08); background:var(--bg-2); color:var(--text); width:240px" />
+    `;
+    wrap.appendChild(toolbar);
+
+    const grid = document.createElement('div');
+    grid.className = 'grid';
+    wrap.appendChild(grid);
+
+    const pills = toolbar.querySelectorAll('.pill');
+    function apply(){
+      const q = $('#search').value.toLowerCase();
+      const filter = toolbar.querySelector('.pill.active')?.dataset.filter || 'all';
+      const races = LEAGUE.races.slice().sort(byDate).filter(r=>{
+        const isUpcoming = new Date(r.date) >= now();
+        const okFilter = filter==='all' || (filter==='upcoming' && isUpcoming) || (filter==='past' && !isUpcoming);
+        const okQuery = !q || [r.name,r.circuit,r.country].join(' ').toLowerCase().includes(q);
+        return okFilter && okQuery;
+      });
+      grid.innerHTML = races.map(r=> raceCard(r)).join('');
+      grid.querySelectorAll('button[data-id]').forEach(btn=> btn.addEventListener('click', ()=> openRace(btn.dataset.id)));
+    }
+    pills.forEach((p,i)=>{ if(i===0)p.classList.add('active'); p.onclick=()=>{ pills.forEach(x=>x.classList.remove('active')); p.classList.add('active'); apply(); } });
+    $('#search').oninput = apply;
+    apply();
+  }
+
+  function showRace(id) {
+    const race = LEAGUE.races.find(r => r.id === id)
+    const dlg = document.getElementById("race-dialog");
+    let html = `<h3>${race.name}</h3><p>Datum: ${race.date}</p>`;
+    html += "<table><tr><th>Platz</th><th>Fahrer</th></tr>";
+    const raceresults = LEAGUE.results[race.id]
+    raceresults.forEach((f, i) => {
+      html += `<tr><td>${i+1}</td><td>${f}</td></tr>`;
+    });
+    html += "</table>";
+    html += `<br><button onclick="closeRaceDialog()">Schließen</button>`;
+      dlg.innerHTML = html;
+      if (typeof dlg.showModal === "function") {
+        dlg.showModal();
+      } else {
+        dlg.setAttribute("open", "open"); // Fallback
+      }
+    }
+
+    function closeRaceDialog() {
+      const dlg = document.getElementById("race-dialog");
+      if (typeof dlg.close === "function") {
+        dlg.close();
+      } else {
+        dlg.removeAttribute("open");
+      }
+    }
+
+
+  function raceCard(r){
+    const isUpcoming = new Date(r.date) >= now();
+    const flag = isUpcoming? 'Bevorstehend' : 'Gelaufen';
+    const t = formatDate(r.date);
+    return `
+      <article class="card race" aria-label="${r.name}">
+        <div class="img"></div>
+        <span class="flag">${flag}</span>
+        <div class="card-inner">
+          <h3>${r.round}. ${r.name}</h3>
+          <div class="meta">${r.circuit} • ${r.country} • ${t}</div>
+          <div class="tags">
+            <span class="tag">${r.laps} Runden</span>
+            <span class="tag">${r.drsZones}× DRS</span>
+          </div>
+          <button data-id="${r.id}" aria-label="Details zu ${r.name}">${isUpcoming? 'Event-Details' : 'Ergebnisse ansehen'}</button>
+        </div>
+      </article>`;
+  }
+
+  function openRace(id){
+    const r = LEAGUE.races.find(x=>x.id===id);
+    const res = LEAGUE.results[id];
+    const dlg = $('#race-dialog');
+    const hasRes = Array.isArray(res) && res.length;
+    let results;
+      results = resultsTable(res)
+      dlg.innerHTML = `
+      <div class=\"detail-head\">
+        <div>
+          <div style=\"font-size:14px; color:var(--muted)\">Runde ${r.round} • ${r.country}</div>
+          <div style= \"font-weight:900; font-size:22px\">${r.name}</div>
+        </div>
+        <button class= \"pill\" onclick=\"closeRaceDialog()\">Schließen</button>
+      </div>
+      <div class= \"detail-body\">
+        <div class= \"detail-grid\">
+          <div class= \"card\"><div class= \"card-inner\">
+            <h3 style= \"margin-top:0\">Ergebnisse</h3>
+            ${results}
+            </div></div>
+            <div class= \"card\"><div class= \"card-inner\">
+              <h3 style= \"margin-top:0\">Details</h3>
+              <p><strong>Datum:</strong>
+              ${formatDate(r.date)}</p>
+              <p><strong>Runden:</strong>
+              ${r.laps}</p>
+              <p><strong>DRS-Zonen:</strong>
+              ${r.drsZones}</p>
+              </div></div>
+              </div></div>
+              `;
+
+  
+    if (typeof dlg.showModal === 'function') { dlg.showModal(); } else { dlg.setAttribute('open','open'); }
+  }
+
+  function resultsTable(rows){
+    return `<table aria-label="Rennergebnis"><thead><tr><th>Pos</th><th>Fahrer</th><th>Team</th><th>Zeit/Abstand</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><td>${r.pos}</td><td>${r.driver}</td><td>${r.team}</td><td>${r.time}</td></tr>`).join('')}
+    </tbody></table>`;
+  }
+
+  // ======= Teams =============================================================
+  function renderTeams(){
+    const wrap = $('#view-teams');
+    wrap.innerHTML = `<div class="grid">${LEAGUE.teams.map(t=>`
+      <div class="team">
+        <div class="color" style="background:${t.color}"></div>
+        <div style="flex:1">
+          <div style="font-weight:800">${t.name}</div>
+          <div class="drivers">${t.drivers.join(' • ')}</div>
+        </div>
+      </div>`).join('')}</div>`;
+  }
+
+  // ======= Discord ===========================================================
+  function renderDiscord(){
+    const wrap = $('#view-discord');
+    wrap.innerHTML = `
+      <div class="card"><div class="card-inner">
+        <h2 style="margin-top:0">Discord</h2>
+        <p>Tritt unserer Community bei, um Ankündigungen, Briefings und Support zu erhalten.</p>
+        <p><a class="chip" href="${LEAGUE.discordInvite}" target="_blank" rel="noopener">Jetzt beitreten →</a></p>
+        <iframe src="https://discord.com/widget?id=1403269469878489139&theme=dark" width="350" height="500" allowtransparency="true" frameborder="0" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"></iframe>
+      </div></div>`;
+  }
+
+  // ======= FAQ ===============================================================
+  function renderFAQ(){
+    const wrap = $('#view-faq');
+    wrap.innerHTML = LEAGUE.faq.map(x=>`<details><summary>${x.q}</summary><p style="margin:10px 0 0">${x.a}</p></details>`).join('');
+  }
+
+  // ======= Admin mini-CMS (optional) ========================================
+  // Add ?admin=1 to the URL to reveal import/export for results JSON
+  (function adminTools(){
+    const isAdmin = new URLSearchParams(location.search).get('admin')==='1';
+    if(!isAdmin) return;
+    const adminBar = document.createElement('div');
+    adminBar.style.cssText='position:fixed; right:16px; bottom:16px; z-index:60; display:grid; gap:8px;';
+    adminBar.innerHTML = `
+      <button class="pill" id="exportJSON">Ergebnisse exportieren</button>
+      <button class="pill" id="importJSON">Ergebnisse importieren</button>`;
+    document.body.appendChild(adminBar);
+    $('#exportJSON').onclick = ()=>{
+      const data = JSON.stringify(LEAGUE.results, null, 2);
+      const blob = new Blob([data], {type:'application/json'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'results.json';
+      a.click();
+    };
+    $('#importJSON').onclick = ()=>{
+      const inp = document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
+      inp.onchange = e=>{
+        const file = e.target.files?.[0]; if(!file) return;
+        const fr = new FileReader(); fr.onload = ()=>{ try{ LEAGUE.results = JSON.parse(fr.result); alert('Import ok – Seite neu laden!'); }catch{ alert('Ungültige JSON'); } };
+        fr.readAsText(file);
+      }; inp.click();
+    };
+  })();
+
+  // ======= Boot ==============================================================
+  window.addEventListener('hashchange', route);
+  document.addEventListener('DOMContentLoaded', ()=>{
+    // Tabs klicken -> Hash setzen (Router)
+    $$('.tab').forEach(btn=> btn.addEventListener('click', ()=>{
+      const r = btn.dataset.route || '#/home';
+      if(location.hash !== r) location.hash = r; else route();
+    }));
+    route();
+    $('#year').textContent = new Date().getFullYear();
+  });
+  </script>
+</body>
+</html>
