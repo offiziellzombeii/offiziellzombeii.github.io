@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Session Replay · Pit Wall</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="site.css">
+</head>
+<body class="frame-page">
+
+  <nav class="site-nav">
+    <a class="site-brand" href="index.html"><span class="site-stripe"></span>Pit Wall</a>
+    <div class="site-links">
+      <a href="index.html">Home</a>
+      <a href="replay.html" class="active">Session Replay</a>
+      <a href="race-control/index.html">Race Control</a>
+    </div>
+  </nav>
+
+  <!-- The replay app itself lives unchanged in the folder "f1-replay".
+       We show it here inside a frame, below the site navigation. -->
+  <iframe src="f1-replay/index.html" title="F1 Session Replay"></iframe>
+
+  <script>
+    // Give the keyboard focus to the replay, so space / arrow keys work right away.
+    const frame = document.querySelector("iframe");
+    frame.addEventListener("load", () => frame.contentWindow.focus());
+  </script>
+</body>
+</html>

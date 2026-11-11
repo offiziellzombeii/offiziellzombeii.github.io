@@ -1,0 +1,597 @@
+/* =====================================================================
+   COLOURS AND SIZES
+   We store colours in "CSS variables" so we can reuse them everywhere.
+   Use them like this: color: var(--muted);
+   ===================================================================== */
+:root {
+  --bg: #0b0d12;        /* page background */
+  --card: #141821;      /* card background */
+  --card-2: #1b202b;    /* slightly lighter boxes inside cards */
+  --border: #252b38;
+  --text: #e6e9ef;
+  --muted: #8b93a7;     /* grey text */
+  --accent: #e10600;    /* F1 red */
+  --purple: #b16cff;    /* fastest overall */
+  --green: #2fd36b;     /* personal best */
+  --yellow: #ffd60a;
+  --orange: #ff7a00;
+  --red: #ff3b30;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+h3 {
+  margin: 20px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* numbers that all have the same width, so they don't "jump" */
+.mono {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* ---------- Inputs and buttons ---------- */
+select, button {
+  font: inherit;
+  color: var(--text);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover, select:hover {
+  background: #262c3a;
+}
+
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.button-primary:hover {
+  background: #ff2a1f;
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 800;
+  font-style: italic;
+}
+
+.brand-stripe {
+  width: 28px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+  transform: skewX(-20deg);
+}
+
+.pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* ---------- Replay controls (sticky = stays at the top when scrolling) ---------- */
+.controls {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: rgba(11, 13, 18, 0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.button-play {
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 16px;
+}
+
+.button-play:hover {
+  background: #ffffff;
+}
+
+.button-round {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 18px;
+}
+
+#timeSlider {
+  flex: 1;
+  min-width: 160px;
+  accent-color: var(--accent);
+}
+
+#clock {
+  font-size: 16px;
+}
+
+/* small rounded labels */
+.pill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* colours of the track status label */
+.status-green  { background: rgba(47, 211, 107, 0.15); color: var(--green);  border-color: transparent; }
+.status-yellow { background: rgba(255, 214, 10, 0.18); color: var(--yellow); border-color: transparent; }
+.status-orange { background: rgba(255, 122, 0, 0.2);   color: var(--orange); border-color: transparent; }
+.status-red    { background: var(--red); color: #ffffff; border-color: transparent; }
+.status-white  { background: #ffffff; color: #000000; border-color: transparent; }
+
+/* ---------- Page layout: a grid with 2 columns ---------- */
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 16px;
+  max-width: 1700px;
+  margin: 0 auto;
+  padding: 16px 20px;
+}
+
+/* On small screens: just 1 column */
+@media (max-width: 1000px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.card {
+  min-width: 0;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+/* ---------- Track map ---------- */
+canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 40%, #161b26, #0d1017);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.legend i {
+  display: inline-block;
+  width: 16px;
+  height: 4px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.legend i.dashed {
+  background: repeating-linear-gradient(90deg, var(--yellow) 0 5px, transparent 5px 8px);
+}
+
+.legend i.ring {
+  width: 12px;
+  height: 12px;
+  border: 2px dashed var(--orange);
+  border-radius: 50%;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- Tables ---------- */
+.table-wrap {
+  max-height: 640px;
+  overflow: auto;
+}
+
+.table-wrap.small {
+  max-height: 260px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+th {
+  position: sticky; /* header stays visible when scrolling the table */
+  top: 0;
+  padding: 6px 8px;
+  background: var(--card);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+td {
+  padding: 7px 8px;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+#leaderboard tbody tr {
+  cursor: pointer;
+}
+
+#leaderboard tbody tr:hover {
+  background: var(--card-2);
+}
+
+#leaderboard tbody tr.selected {
+  background: #232a38;
+  box-shadow: inset 3px 0 0 var(--text);
+}
+
+#leaderboard tbody tr.retired td {
+  opacity: 0.4;
+}
+
+.pos {
+  width: 28px;
+  font-weight: 800;
+}
+
+.team-bar {
+  display: inline-block;
+  width: 4px;
+  height: 16px;
+  margin-right: 8px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.up   { color: var(--green); font-size: 11px; }
+.down { color: var(--red);   font-size: 11px; }
+.same { color: var(--muted); font-size: 11px; }
+
+.purple { color: var(--purple); font-weight: 700; }
+.green  { color: var(--green);  font-weight: 600; }
+
+/* small labels like PIT / OUT / BATTLE */
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.tag.pit    { background: var(--yellow); color: #000000; }
+.tag.out    { background: #3b4252; color: var(--muted); }
+.tag.battle { background: rgba(255, 122, 0, 0.2); color: var(--orange); }
+
+/* tyre: a ring in the tyre colour with a letter inside */
+.tyre {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  border: 3px solid;
+  border-radius: 50%;
+  background: #0d1017;
+  font-size: 9px;
+  font-weight: 800;
+  vertical-align: middle;
+}
+
+/* ---------- Driver card ---------- */
+#driverCard {
+  --team: #888888; /* changed by JavaScript to the team colour */
+}
+
+.driver-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  border-left: 4px solid var(--team);
+  border-radius: 10px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--team) 40%, transparent), transparent 70%);
+}
+
+#driverPhoto {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: top;
+  background: var(--card-2);
+}
+
+.driver-number {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--team);
+}
+
+.driver-name {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* boxes with a small label and a big value */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stat {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--card-2);
+}
+
+.stat span {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.stat b {
+  display: block;
+  margin-top: 2px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.telemetry {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bar-row span {
+  width: 60px;
+}
+
+.bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--card-2);
+  overflow: hidden;
+}
+
+.bar-fill {
+  width: 0;
+  height: 100%;
+}
+
+.throttle { background: var(--green); }
+.brake    { background: var(--red); }
+
+.drs-open      { color: var(--green); }
+.drs-available { color: var(--yellow); }
+
+/* ---------- Lists ---------- */
+.radio-list, .battle-list, #events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.radio-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+.radio-list audio {
+  flex: 1;
+  height: 32px;
+}
+
+.battle-list li {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--orange);
+  border-radius: 8px;
+  background: var(--card-2);
+}
+
+.time {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Tyre strategy ---------- */
+.strat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.strat-name {
+  width: 36px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.strat-row.selected .strat-name {
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.strat-bar {
+  position: relative;
+  flex: 1;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--card-2);
+  overflow: hidden;
+}
+
+.stint {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  padding-left: 4px;
+  border-right: 2px solid var(--card);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 16px;
+  color: #000000;
+  overflow: hidden;
+}
+
+.lap-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffffff;
+}
+
+.strat-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: 44px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---------- Events ---------- */
+#events {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+#events li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot.overtake { background: #22d3ee; }
+.dot.pit      { background: var(--yellow); }
+.dot.flag     { background: var(--orange); }
+.dot.control  { background: var(--muted); }

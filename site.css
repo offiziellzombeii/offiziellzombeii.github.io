@@ -1,0 +1,325 @@
+/* =====================================================================
+   site.css
+   Styles shared by all pages of the website:
+   the navigation bar and the homepage.
+   (The replay keeps its own f1-replay/style.css,
+    the race control has its own race-control/rc.css.)
+   ===================================================================== */
+:root {
+  --site-bg: #0b0d12;
+  --site-card: #141821;
+  --site-card-2: #1b202b;
+  --site-border: #252b38;
+  --site-text: #e6e9ef;
+  --site-muted: #8b93a7;
+  --site-accent: #e10600;
+  --site-nav-height: 52px;
+}
+
+/* ---------- Navigation bar (on every page) ---------- */
+.site-nav {
+  position: relative;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: var(--site-nav-height);
+  padding: 0 20px;
+  background: #07090d;
+  border-bottom: 1px solid var(--site-border);
+  font-family: "Inter", Arial, sans-serif;
+}
+
+.site-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--site-text);
+  font-size: 17px;
+  font-weight: 800;
+  font-style: italic;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-stripe {
+  width: 26px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--site-accent);
+  transform: skewX(-20deg);
+}
+
+.site-links {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+
+.site-links a {
+  padding: 7px 12px;
+  border-radius: 8px;
+  color: var(--site-muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.site-links a:hover {
+  background: var(--site-card-2);
+  color: var(--site-text);
+}
+
+.site-links a.active {
+  background: var(--site-card-2);
+  color: var(--site-text);
+  box-shadow: inset 0 -2px 0 var(--site-accent);
+}
+
+/* ---------- Homepage ---------- */
+.home {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--site-bg);
+  color: var(--site-text);
+  font-family: "Inter", Arial, sans-serif;
+  font-size: 15px;
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 72px 20px 56px;
+  border-bottom: 1px solid var(--site-border);
+  background:
+    radial-gradient(ellipse at 80% 20%, rgba(225, 6, 0, 0.18), transparent 55%),
+    radial-gradient(ellipse at 10% 90%, rgba(80, 110, 255, 0.10), transparent 50%);
+}
+
+.hero-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 40px;
+  align-items: center;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+@media (max-width: 860px) {
+  .hero-inner { grid-template-columns: minmax(0, 1fr); }
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 4px 10px;
+  border: 1px solid var(--site-border);
+  border-radius: 999px;
+  color: var(--site-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  margin: 0 0 16px;
+  font-size: clamp(34px, 5vw, 56px);
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.hero h1 span {
+  color: var(--site-accent);
+}
+
+.hero p {
+  max-width: 560px;
+  margin: 0 0 26px;
+  color: var(--site-muted);
+  font-size: 17px;
+  line-height: 1.6;
+}
+
+.hero-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 18px;
+  border: 1px solid var(--site-border);
+  border-radius: 10px;
+  background: var(--site-card-2);
+  color: var(--site-text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.btn:hover { background: #262c3a; }
+
+.btn-primary {
+  background: var(--site-accent);
+  border-color: var(--site-accent);
+}
+
+.btn-primary:hover { background: #ff2a1f; }
+
+/* the animated track drawing in the hero */
+.hero-track {
+  width: 100%;
+  max-width: 520px;
+  justify-self: center;
+}
+
+.hero-track .tarmac {
+  fill: none;
+  stroke: #2b3242;
+  stroke-width: 14;
+  stroke-linejoin: round;
+}
+
+.hero-track .line {
+  fill: none;
+  stroke: #4a5368;
+  stroke-width: 2;
+  stroke-dasharray: 6 8;
+}
+
+.section {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 48px 20px;
+}
+
+.section h2 {
+  margin: 0 0 8px;
+  font-size: 26px;
+  font-weight: 800;
+}
+
+.section > p {
+  margin: 0 0 26px;
+  color: var(--site-muted);
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.feature {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  border: 1px solid var(--site-border);
+  border-radius: 14px;
+  background: var(--site-card);
+}
+
+.feature-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.feature-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: rgba(225, 6, 0, 0.15);
+  color: #ff5a52;
+  font-size: 20px;
+}
+
+.feature h3 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.feature p {
+  margin: 0 0 14px;
+  color: var(--site-muted);
+  line-height: 1.55;
+}
+
+.feature ul {
+  flex: 1;
+  margin: 0 0 20px;
+  padding-left: 18px;
+  color: #c3c9d6;
+  line-height: 1.7;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.step {
+  padding: 18px;
+  border-radius: 12px;
+  background: var(--site-card-2);
+}
+
+.step b {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.step span {
+  color: var(--site-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.step-number {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 10px;
+  border-radius: 50%;
+  background: var(--site-accent);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.site-footer {
+  padding: 24px 20px 40px;
+  border-top: 1px solid var(--site-border);
+  color: var(--site-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.site-footer a { color: #c3c9d6; }
+
+/* ---------- Replay page: navigation + the replay in a frame ---------- */
+.frame-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  margin: 0;
+  background: var(--site-bg);
+}
+
+.frame-page iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+}
