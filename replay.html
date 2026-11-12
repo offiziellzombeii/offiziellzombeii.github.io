@@ -7,8 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="site.css">
+  <script src="perf.js"></script> <!-- ?perf=1: keeps the parameter on the links (the replay below shows the overlay) -->
 </head>
-<body class="frame-page">
+<body class="frame-page" data-own-perf="1">
 
   <nav class="site-nav">
     <a class="site-brand" href="index.html"><span class="site-stripe"></span>Pit Wall</a>
@@ -27,6 +28,8 @@
     // Give the keyboard focus to the replay, so space / arrow keys work right away.
     const frame = document.querySelector("iframe");
     frame.addEventListener("load", () => frame.contentWindow.focus());
+    // ?perf=1: the performance overlay is shown inside the replay
+    if (/[?&]perf=1(&|$)/.test(location.search)) frame.src = "f1-replay/index.html?perf=1";
   </script>
 </body>
 </html>

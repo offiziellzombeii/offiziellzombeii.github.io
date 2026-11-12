@@ -8,8 +8,9 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../site.css">
   <link rel="stylesheet" href="rc.css">
+  <script src="../perf.js"></script> <!-- ?perf=1: keeps the parameter on the links (own detailed overlay in main.js) -->
 </head>
-<body class="rc">
+<body class="rc" data-own-perf="1">
 
   <nav class="site-nav">
     <a class="site-brand" href="../index.html"><span class="site-stripe"></span>Pit Wall</a>
@@ -23,7 +24,11 @@
   <!-- ================= 1. CHOOSE A RACE ================= -->
   <section id="setupScreen" class="setup">
     <div class="setup-head">
-      <h1>Race Control</h1>
+      <div class="setup-title">
+        <h1>Race Control</h1>
+        <span id="appVersion" class="version-tag"></span>
+        <button id="changelogBtn" class="small-btn">Changelog</button>
+      </div>
       <p>You are the Race Director and the Stewards. Choose a race – the simulation drives the cars, you keep the race safe and fair.</p>
     </div>
 
@@ -60,7 +65,7 @@
         <div class="form-row">
           <label>Car generation
             <select id="fRegs">
-              <option value="GE2023">2023–2025 · ground effect + DRS</option>
+              <option value="GE2023">2011–2025 · DRS + non hybrid</option>
               <option value="GEN2026">2026 · active aero + Overtake Mode</option>
             </select>
           </label>
@@ -85,22 +90,19 @@
             <input id="fSeed" type="number" placeholder="random">
           </label>
         </div>
-        <button id="startFictional" class="button-primary big">Start fictitious session</button>
+        <button id="startFictional" class="button-primary big start-btn">Start fictitious session</button>
       </article>
 
       <!-- Historic race -->
       <article class="setup-card">
         <span class="setup-tag">OpenF1 data</span>
         <h2>Historic race</h2>
-        <p class="muted">A real race or qualifying from OpenF1: real circuit, drivers, grid, pace, tyre strategies and rain. The real incidents and retirements happen at the real moment – and your rulings are compared with the real stewards.</p>
+        <p class="muted">A real race or qualifying from Formula 1: real circuit, drivers, grid, pace, tyre strategies and rain. The real incidents and retirements happen at the real moment – and your rulings are compared with the real stewards. Older seasons from the data packs (e.g. 2020) are simulated with their cars, drivers and circuits.</p>
 
         <div class="form-row">
           <label>Year
             <select id="hYear">
-              <option>2023</option>
-              <option>2024</option>
               <option selected>2025</option>
-              <option>2026</option>
             </select>
           </label>
           <label>Grand Prix
@@ -111,7 +113,7 @@
           <select id="hSession"></select>
         </label>
         <div class="form-row">
-          <label>Race distance / session length
+          <label>Session length
             <select id="hDistance">
               <option value="1">Full distance</option>
               <option value="0.5" selected>50 %</option>
@@ -127,20 +129,71 @@
           </label>
         </div>
         <label class="check"><input type="checkbox" id="hReal" checked> Inject the real incidents, track limits and retirements</label>
-        <button id="startHistoric" class="button-primary big">Load race &amp; start</button>
-        <p id="hStatus" class="muted small"></p>
+        <p id="hStatus" class="muted small status-line"></p>
+        <button id="startHistoric" class="button-primary big start-btn">Load race &amp; start</button>
       </article>
 
       <!-- Championship -->
       <article class="setup-card">
         <span class="setup-tag">Championship</span>
         <h2>Full season</h2>
-        <p class="muted">Run a whole championship as the FIA: up to 24 real circuits raced since 2023, the teams and drivers you choose, 2023–25 or 2026 cars, your own rulebook. The teams build the cars – you run every weekend.</p>
+        <p class="muted">Run a whole championship as the FIA: up to 24 real circuits, the teams and drivers you choose (from the data packs – built in: 2020 and 2023 onwards), DRS-era or 2026 cars, your own rulebook. The teams build the cars – you run every weekend.</p>
         <div id="seasonList" class="season-list"></div>
         <button id="newSeason" class="button-primary big">New championship</button>
         <label class="file-btn">Import a season file<input id="importSeason" type="file" accept=".json,application/json"></label>
+        <p class="muted small">Seasons available: <b id="packYears"></b> · <a href="#dataPacks" class="inline-link">more seasons: data packs ↓</a></p>
       </article>
     </div>
+
+    <!-- Data packs: circuits, teams and drivers of other seasons -->
+    <section id="dataPacks" class="setup-card packs-card">
+      <div class="packs-head">
+        <div>
+          <span class="setup-tag">Data packs</span>
+          <h2>Seasons, circuits &amp; drivers <span id="packCount" class="muted"></span></h2>
+          <p class="muted">The championship and the historic races use the data packs below. Add any season since 1950:
+            build a pack from open data with the Data Pack Builder, or import a pack file somebody shared.</p>
+        </div>
+        <div class="packs-actions">
+          <a class="button-link button-primary" href="tools/pack-builder.html">Build a data pack</a>
+          <label class="file-btn">Import a data pack<input id="importPack" type="file" accept=".json,application/json"></label>
+        </div>
+      </div>
+      <div id="packList" class="packs-list"></div>
+    </section>
+
+    <!-- Edit track: DRS / Straight Mode zones, detection points, track limits corners (track-editor.js) -->
+    <section id="trackEditorBox" class="setup-card packs-card">
+      <div class="packs-head">
+        <div>
+          <span class="setup-tag">Edit track</span>
+          <h2>Zones &amp; track limits</h2>
+          <p class="muted">Set the DRS zones and detection points (2011–2025 cars), the Straight Mode zones and the Overtake Mode detection point (2026 cars) and the usual track limits corners of a circuit. Used in every mode – a championship with its own zones (Circuits &amp; zones) keeps them.</p>
+        </div>
+        <div class="packs-actions te-pick">
+          <select id="teCircuit"></select>
+          <button id="teOpen" class="button-primary">Edit track</button>
+        </div>
+      </div>
+      <p id="teStatus" class="muted small"></p>
+      <div id="teArea"></div>
+    </section>
+
+    <!-- Your data & settings: everything of this browser as one .zip (backup.js) -->
+    <section id="backupBox" class="setup-card packs-card">
+      <div class="packs-head">
+        <div>
+          <span class="setup-tag">Backup</span>
+          <h2>Your data &amp; settings</h2>
+          <p class="muted">Everything Race Control stores in this browser in one .zip file: championships, edited tracks, keyboard shortcuts, imported data packs and the track &amp; map cache. Import it again here – on this or another computer.</p>
+        </div>
+        <div class="packs-actions">
+          <button id="exportAll" class="button-primary">Export all (.zip)</button>
+          <label class="file-btn">Import your data &amp; settings<input id="importAll" type="file" accept=".zip,application/zip"></label>
+        </div>
+      </div>
+      <p id="backupStatus" class="muted small"></p>
+    </section>
 
     <div class="setup-help">
       <h3>Your job as Race Director</h3>
@@ -184,7 +237,7 @@
       <span id="statusPill" class="pill status-green">TRACK CLEAR</span>
       <div id="weatherBox" class="weather-box"></div>
       <div class="sim-controls">
-        <button id="pauseBtn" class="icon-btn" title="Pause / continue (space bar)">❚❚</button>
+        <button id="pauseBtn" class="icon-btn" title="Pause / continue (space bar)" aria-label="Pause or continue">❚❚</button>
         <div id="speedBtns" class="seg">
           <button data-speed="1" class="active">1×</button>
           <button data-speed="2">2×</button>
@@ -195,6 +248,7 @@
         </div>
         <label class="check small" title="Switch back to 1× speed when something dangerous happens"><input type="checkbox" id="autoSlow" checked> Auto 1× on danger</label>
       </div>
+      <button id="keysBtn" class="icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">⌨</button>
       <button id="reportBtn">Race report</button>
       <button id="seasonRcBtn" hidden title="Back to the championship without saving this session">Championship</button>
     </header>
@@ -233,6 +287,7 @@
             <span><i style="background:#ffd60a"></i>Yellow</span>
             <span><i style="background:#ffb020"></i>Double yellow</span>
             <span><i class="striped"></i>Slippery</span>
+            <span><i style="background:#3d8bff"></i>Rain</span>
             <span><i style="background:#ff7a00"></i>SC</span>
             <span><i class="dashed"></i>VSC</span>
             <span id="aidLegend"><i style="background:#2fd36b"></i>DRS zone</span>
@@ -240,69 +295,78 @@
           </div>
         </div>
 
+        <!-- Race Director console, grouped by purpose:
+             start + pit lane | neutralisation + red flag & end of session | marshal sector + recovery -->
         <div class="console">
-          <div class="console-group">
+          <div class="console-col c-left">
+          <div class="console-group cg-start">
             <h3 id="startGroupTitle">Start procedure</h3>
-            <div class="btn-row">
+            <div class="btn-grid cols-3">
               <button data-action="formation" class="race-only">Formation lap</button>
               <button data-action="sequence" class="go race-only">Start lights</button>
               <button data-action="abort" class="warn race-only">Abort start</button>
               <button data-action="startSC" class="race-only">Start behind SC</button>
               <button data-action="delayStart" class="race-only" title="Weather or track not ready: hold the start">Delay start</button>
-              <button data-action="segment" id="segmentBtn" class="go quali-only">Start Q1 (green light)</button>
+              <button data-action="segment" id="segmentBtn" class="go quali-only span-2">Start Q1 (green light)</button>
+              <button data-action="eventNotes" id="eventNotesBtn" title="Before the session: track limits corners, pit lane speed limit and notes for the teams">Event notes…</button>
             </div>
           </div>
-
-          <div class="console-group">
-            <h3>Track status</h3>
-            <div class="btn-row race-only">
-              <button data-action="vsc" class="yellow">VSC</button>
-              <button data-action="endVsc">VSC ending</button>
-              <button data-action="sc" class="orange">Safety Car</button>
-              <button data-action="lapped">Lapped cars may overtake</button>
-              <button data-action="scIn">SC in this lap</button>
-            </div>
-            <div class="btn-row">
-              <button data-action="red" class="red">RED FLAG</button>
-              <button data-action="resumeStanding" id="resumeBtn">Resume: standing start</button>
-              <button data-action="resumeRolling" class="race-only">Resume: behind SC</button>
-              <button data-action="shorten" class="race-only">Chequered at end of lap</button>
-              <button data-action="skip" title="Let 5 minutes pass (before the start or during a suspension)">Wait 5 min</button>
-              <button data-action="abandon" class="danger-btn" title="The session will not be resumed – classification by count-back">Abandon session</button>
-            </div>
-          </div>
-
-          <div class="console-group">
-            <h3>Marshal sector <span id="selSectorLabel" class="sector-label">– click the map</span></h3>
-            <div class="btn-row">
-              <button data-action="yellow" class="yellow">Yellow</button>
-              <button data-action="double" class="double">Double yellow</button>
-              <button data-action="slippery">Slippery surface</button>
-              <button data-action="clear" class="go">Clear</button>
-              <button data-action="clearAll">Clear all sectors</button>
-            </div>
-          </div>
-
-          <div class="console-group">
+          <div class="console-group cg-pit">
             <h3 id="aidGroupTitle">Pit lane, DRS &amp; conditions</h3>
-            <div class="btn-row">
+            <div class="btn-grid cols-2">
               <button data-action="pitEntry" id="pitEntryBtn">Pit entry: open</button>
               <button data-action="pitExit" id="pitExitBtn">Pit exit: open</button>
               <button data-action="drs" id="drsBtn">DRS: disabled</button>
-              <button data-action="straight" id="straightBtn" class="gen2026-only" title="Active aero: low-drag wings on the straights for all cars">Straight Mode: active</button>
+              <button data-action="wet">Declare wet race</button>              <button data-action="straight" id="straightBtn" class="gen2026-only" title="Active aero: low-drag wings on the straights for all cars">Straight Mode: active</button>
               <button data-action="straightZone" id="straightZoneBtn" class="gen2026-only" title="Switch the Straight Mode zone in the selected marshal sector on or off">Straight zone: –</button>
-              <button data-action="wet">Declare wet race</button>
-              <button data-action="maxDelta" id="maxDeltaBtn" class="quali-only" title="Maximum delta time for out laps and in laps">Max delta time: in force</button>
-              <label class="check small"><input type="checkbox" id="autoYellow" checked> Marshals show local yellows</label>
+              <button data-action="maxDelta" id="maxDeltaBtn" class="quali-only span-2" title="Maximum delta time for out laps and in laps">Max delta time: in force</button>
             </div>
           </div>
+          </div>
 
-          <div class="console-group">
-            <h3>Message to all teams</h3>
-            <form id="messageForm" class="message-form">
-              <input id="messageInput" type="text" maxlength="120" placeholder="e.g. TRACK LIMITS AT TURN 4 WILL BE MONITORED">
-              <button type="submit">Send</button>
-            </form>
+          <div class="console-col c-mid">
+          <div class="console-group cg-neutral race-only">
+            <h3>Neutralisation</h3>
+            <div class="btn-grid cols-3">
+              <button data-action="vsc" class="yellow">VSC</button>
+              <button data-action="endVsc">VSC ending</button>
+              <button data-action="lapped" title="Lapped cars may overtake the field and the Safety Car">Lapped cars may overtake</button>
+              <button data-action="sc" class="orange">Safety Car</button>
+              <button data-action="scIn">SC in this lap</button>
+              <button data-action="scStanding" title="The Safety Car comes in at the end of this lap – the cars line up on the grid in race order for a standing start (e.g. after a start behind the Safety Car in the rain)">SC in: standing start</button>
+            </div>
+          </div>
+          <div class="console-group cg-red">
+            <h3>Red flag &amp; end of session</h3>
+            <div class="btn-grid cols-3">
+              <button data-action="red" class="red">RED FLAG</button>
+              <button data-action="resumeStanding" id="resumeBtn">Resume: standing start</button>
+              <button data-action="resumeRolling" class="race-only">Resume: behind SC</button>
+              <button data-action="skip" title="Let 5 minutes pass (before the start or during a suspension)">Wait 5 min</button>
+              <button data-action="shorten" class="race-only" title="Show the chequered flag at the end of the current lap">Chequered at end of lap</button>
+              <button data-action="abandon" class="danger-btn" title="The session will not be resumed – classification by count-back">Abandon session</button>
+            </div>
+          </div>
+          </div>
+
+          <div class="console-col c-right">
+          <!-- marshal sectors and the recovery of obstacles belong together -->
+          <div class="console-group cg-sector">
+            <h3>Marshal sector <span id="selSectorLabel" class="sector-label">– click or drag on the map</span></h3>
+            <div class="btn-grid cols-3">
+              <button data-action="yellow" class="yellow">Yellow</button>
+              <button data-action="double" class="double">Double yellow</button>
+              <button data-action="clear" class="go">Clear</button>
+              <button data-action="slippery" class="slippery">Slippery surface</button>
+              <button data-action="rain" class="rain" title="The rain symbol on the flag panels of the selected sector(s) – without a selected sector: the whole track (on, or off everywhere)">Rain</button>
+              <button data-action="clearAll">Clear all sectors</button>
+            </div>
+            <label class="check small console-check"><input type="checkbox" id="autoYellow" checked> Marshals show local yellows automatically</label>
+            <label class="check small console-check" title="A marshal post shows the rain signal when it rains in its sector and takes it back when the rain has stopped"><input type="checkbox" id="autoRain" checked> Marshals show the rain signal automatically</label>
+            <label class="check small console-check" title="The recovery crews (marshals, recovery vehicle, crane, medical car) are sent without you"><input type="checkbox" id="autoRecovery"> Send recovery crews automatically</label>
+            <h3 class="sub-head">On track – recovery</h3>
+            <ul id="trackJobs" class="jobs"></ul>
+          </div>
           </div>
         </div>
       </section>
@@ -313,10 +377,12 @@
           <button data-tab="incidents" class="active">Incidents <span id="cntInc" class="count"></span></button>
           <button data-tab="limits">Track limits <span id="cntTl" class="count"></span></button>
           <button data-tab="penalties">Penalties</button>
+          <button data-tab="radio">Radio <span id="cntRadio" class="count"></span></button>
         </div>
         <div class="tab-body" id="tabIncidents"></div>
         <div class="tab-body" id="tabLimits" hidden></div>
         <div class="tab-body" id="tabPenalties" hidden></div>
+        <div class="tab-body" id="tabRadio" hidden></div>
 
         <div class="panel-head"><h2>Marshals &amp; systems</h2></div>
         <ul id="alerts" class="feed"></ul>
@@ -325,18 +391,36 @@
           <h2>Race control messages</h2>
           <label class="check small"><input type="checkbox" id="showBlue"> blue flags</label>
         </div>
+        <form id="messageForm" class="message-form">
+          <input id="messageInput" type="text" maxlength="120" aria-label="Message to all teams" placeholder="Message to all teams, e.g. TRACK LIMITS AT TURN 4 WILL BE MONITORED">
+          <button type="submit">Send</button>
+        </form>
         <ul id="messages" class="feed"></ul>
       </section>
     </main>
   </section>
 
   <!-- pop-up window (incident review, race report ...) -->
-  <div id="modal" class="modal" hidden>
+  <div id="modal" class="modal" role="dialog" aria-modal="true" hidden>
     <div id="modalBox" class="modal-box"></div>
   </div>
   <div id="toast" class="toast" hidden></div>
 
   <!-- The order of the scripts matters -->
+  <!-- settings: every value that tunes the simulation, one file per topic (see settings/README.txt) -->
+  <script src="settings/simulation.js"></script>
+  <script src="settings/cars.js"></script>
+  <script src="settings/tyres.js"></script>
+  <script src="settings/track.js"></script>
+  <script src="settings/pitlane.js"></script>
+  <script src="settings/neutralisation.js"></script>
+  <script src="settings/incidents.js"></script>
+  <script src="settings/marshals.js"></script>
+  <script src="settings/weather.js"></script>
+  <script src="settings/sessions.js"></script>
+  <script src="settings/stewards.js"></script>
+  <script src="settings/controls.js"></script>
+  <script src="settings/changelog.js"></script>
   <script src="js/util.js"></script>      <!-- helpers -->
   <script src="js/tracks.js"></script>    <!-- circuits and track geometry -->
   <script src="js/grid.js"></script>      <!-- fictional teams, drivers, strategies -->
@@ -346,11 +430,14 @@
   <script src="js/fia-tools.js"></script> <!-- delay, wait, abandon (count-back), time limits, weather evaluation -->
   <script src="js/qualifying.js"></script> <!-- the qualifying session (Q1, Q2, Q3) -->
   <script src="js/incidents.js"></script> <!-- incidents, marshals, penalties, evaluation -->
+  <script src="js/stewards.js"></script>  <!-- stewards' room: precedents, consistency, decision documents, right of review -->
   <script src="js/director.js"></script>  <!-- the Race Director's commands -->
   <script src="js/historic.js"></script>  <!-- loading a real race from OpenF1 -->
   <script src="js/map.js"></script>       <!-- drawing the map and replays -->
   <script src="js/ui.js"></script>        <!-- all panels and pop-ups -->
-  <script src="js/season-catalogue.js"></script> <!-- real circuits, teams, drivers since 2023 (generated) -->
+  <script src="js/data-registry.js"></script>    <!-- data packs: circuits, teams, drivers of any era -->
+  <script src="data/core-2023.js"></script>      <!-- built-in pack: real circuits, teams, drivers since 2023 (OpenF1) -->
+  <script src="data/season-2020.js"></script>    <!-- built-in pack: the 2020 season (Jolpica + f1-circuits, made with tools/pack-builder.html) -->
   <script src="js/season-data.js"></script>      <!-- circuit character, points, rulebook -->
   <script src="js/season-tracks.js"></script>    <!-- loading / storing the real circuits -->
   <script src="js/season.js"></script>           <!-- the championship state, saving -->
@@ -358,8 +445,11 @@
   <script src="js/season-cars.js"></script>      <!-- car model, power units, development, money, driver market -->
   <script src="js/season-fia.js"></script>       <!-- FIA desk: protests, nominations, cost cap audit, review, next season -->
   <script src="js/season-weekend.js"></script>   <!-- race weekends, results, points, standings -->
+  <script src="js/season-practice.js"></script>  <!-- free practice FP1–FP3: instant simulation, setup confidence, rookie rule -->
   <script src="js/ai-director.js"></script>      <!-- AI Race Director and Stewards (auto-simulation) -->
   <script src="js/season-ui.js"></script>        <!-- championship screens and zone editor -->
+  <script src="js/track-editor.js"></script>   <!-- edit track: zones and track limits corners of every circuit -->
+  <script src="js/backup.js"></script>         <!-- export / import all data & settings as a .zip -->
   <script src="js/main.js"></script>      <!-- setup screen and the main loop -->
 </body>
 </html>

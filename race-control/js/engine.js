@@ -11,17 +11,8 @@
 // =====================================================================
 
 let race = null;          // everything about the running race
-
-const DT = 0.1;           // seconds per simulation step
-const PIT_SPEED = 80 / 3.6; // pit lane speed limit in m/s
-
-const TYRES = {
-  SOFT:         { base: 1.000,  wear: 0.042, colour: "#ff3333", slick: true,  letter: "S" },
-  MEDIUM:       { base: 0.9935, wear: 0.027, colour: "#ffd60a", slick: true,  letter: "M" },
-  HARD:         { base: 0.9875, wear: 0.018, colour: "#f0f0f0", slick: true,  letter: "H" },
-  INTERMEDIATE: { base: 1.000,  wear: 0.030, colour: "#39b54a", slick: false, letter: "I" },
-  WET:          { base: 1.000,  wear: 0.022, colour: "#0090ff", slick: false, letter: "W" }
-};
+// The values that tune the simulation (DT, TYRES, PIT_SPEED, rubber, braking …) are in
+// the folder settings/ – one file per topic.
 
 
 // =====================================================================
@@ -44,6 +35,11 @@ function createRace(setup) {
     offenceScale: setup.offenceScale !== undefined ? setup.offenceScale : 1, // share of minor offences that happen (championship: realistic)
     overtakeScale: setup.overtakeScale !== undefined ? setup.overtakeScale : 1, // how often cars try to overtake
     tyreDeg: setup.tyreDeg !== undefined ? setup.tyreDeg : 1,             // how much the tyres degrade
+    tyreStress: setup.tyreStress !== undefined ? setup.tyreStress : 0.5,  // circuit: 0 = easy … 1 = very hard on the tyres (graining)
+    // rubber on the track (0 = green … 1 = fully rubbered in). Pace is measured against the level
+    // that is usual for this session (rubberRef), so a normal weekend keeps the calibrated lap times.
+    rubber: setup.rubber !== undefined ? setup.rubber : 0.6,
+    rubberRef: setup.rubberRef !== undefined ? setup.rubberRef : (setup.rubber !== undefined ? setup.rubber : 0.6),
     wearScale: clamp(55 / setup.totalLaps, 0.8, 4), // short races wear tyres faster, so there are still pit stops
     fuelPerLap: 98 / setup.totalLaps,
 
@@ -67,10 +63,10 @@ function createRace(setup) {
     drsAdvised: false,
     wetDeclared: false,
     autoMarshalYellow: true,
+    autoMarshalRain: true,   // marshals show the rain signal on their own (director.js marshalRainTick)
     autoSlow: true,
 
     sc: null,                   // the safety car (when it is on track)
-    scInPit: false,
     restartGo: 0,
     vscEndAt: 0,
     lappedMayOvertake: false,
@@ -92,6 +88,7 @@ function createRace(setup) {
     leaderLap: 1,
     obstacles: [],
     incidents: [],
+    radio: [],               // team radio to the Race Director: complaints and requests (incidents.js)
     trackLimits: [],
     messages: [],
     alerts: [],
@@ -107,18 +104,32 @@ function createRace(setup) {
     evalData: {
       stallAtStart: false, startAborted: false, startedWithStall: false, abortsWithoutReason: 0,
       drsWetSeconds: 0, neutralNoReason: 0, marshalRisk: 0, unsafePasses: 0,
-      debrisHits: 0, carHits: 0, scCount: 0, vscCount: 0, redCount: 0, bwShown: 0, bwNeeded: 0
+      debrisHits: 0, carHits: 0, scCount: 0, vscCount: 0, redCount: 0, bwShown: 0, bwNeeded: 0,
+      exitWait: 0, // seconds that cars waited at a closed pit exit after the start
+      recoveryWait: 0, marshalExposed: 0, nearMisses: 0 // recovery crews (incidents.js)
     },
+    autoRecovery: !!setup.autoRecovery, // the crews are sent without the Race Director (AI, option)
     nextId: 1,
     speedRequest: null,
     ver: 0
   };
 
   for (const entry of setup.entries) race.cars.push(makeCar(entry));
-  race.cars.sort((a, b) => a.grid - b.grid);
+  // pit lane starters (parc fermé broken in the championship) come after the grid
+  const lane = race.session === "RACE" ? car => (car.pitLaneStart ? 1 : 0) : () => 0;
+  race.cars.sort((a, b) => lane(a) - lane(b) || a.grid - b.grid);
   placeOnGrid(race.cars);
+  if (race.session === "RACE") {
+    // pit lane starters stand at the back of the grid, drive the formation lap and turn
+    // into the pit lane at its end (moveCar); they leave when the field has passed
+    // the pit exit is closed for the start: the Race Director opens it once the field has
+    // passed (then pit lane starters may leave)
+    race.pitExitOpen = false;
+  }
   initRegs(race); // car generation: DRS (2023–2025) or active aero + battery (2026)
   if (race.session === "QUALI") setupQualifying(race); // cars go to their garages instead
+  // championship: the event notes of the weekend (published before FP1) apply to every session
+  if (setup.eventNotes) applyEventNotes(JSON.parse(JSON.stringify(setup.eventNotes)));
   updateOrder();
   return race;
 }
@@ -139,7 +150,10 @@ function makeWeatherState(w, track) {
 
 function makeCar(e) {
   return {
-    id: e.number, number: e.number, code: e.code, name: e.name,
+    id: e.number, number: e.number, code: e.code, driverId: e.driverId || e.code, name: e.name, pitLaneStart: !!e.pitLaneStart,
+    // championship: new soft sets left for qualifying (null = no tyre allocation), sets used in this session
+    newSofts: e.newSofts != null ? e.newSofts : null, setsUsed: {}, tyreOwner: e.tyreOwner || null,
+    spareSets: e.spareSets ? Object.assign({}, e.spareSets) : null,
     team: e.team, teamIndex: e.teamIndex, teamId: e.teamId || null, colour: e.colour, headshot: e.headshot || null,
     pace: e.pace, aggression: e.aggression, consistency: e.consistency,
     racecraft: e.racecraft, tyreMgmt: e.tyreMgmt,
@@ -204,6 +218,38 @@ function placeOnGrid(list) {
   });
 }
 
+// End of the formation lap: the pit lane starter drives down the pit lane to the end of the
+// queue at the pit exit and waits there (state RED with reason PITSTART -> HOLD, updatePitCar)
+function enterPitForPitLaneStart(car) {
+  const r = race;
+  const L = r.track.length;
+  const waiting = r.cars.filter(c => c !== car && c.pitStart).length;
+  car.mode = "RACE";
+  car.pitStart = true;
+  car.skipLine = true; // the line in the pit lane is not a lap
+  car.pit.state = "RED";
+  car.pit.reason = "PITSTART";
+  car.pit.queueS = mod(r.track.pit.exit - 15 - 11 * waiting, L);
+  car.lateral = car.targetLateral = 0;
+  publish(carLabel(car) + " WILL START FROM THE PIT LANE", "Info");
+}
+
+// Cars that start from the pit lane, put straight into the pit lane (start behind the Safety
+// Car, where there is no formation lap): they wait at the pit exit and go when the field has passed
+function placeInPitLane(list) {
+  const L = race.track.length;
+  const before = race.cars.filter(c => c.pitStart).length; // cars already waiting there
+  list.forEach((car, i) => {
+    car.pitStart = true;
+    car.skipLine = false;
+    car.mode = "RACE";
+    car.pit.state = "HOLD";
+    car.s = mod(race.track.pit.exit - 15 - 11 * (before + i), L);
+    car.speed = 0;
+    car.lateral = car.targetLateral = 0;
+  });
+}
+
 
 // =====================================================================
 //  2. SMALL QUESTIONS
@@ -223,8 +269,9 @@ function progressOf(car) {
   return car.laps * L + (car.skipLine ? car.s - L : car.s);
 }
 
+const NEUTRALISED = new Set(["VSC", "VSC_ENDING", "SC", "SC_ENDING", "RED"]);
 function isNeutralised() {
-  return ["VSC", "VSC_ENDING", "SC", "SC_ENDING", "RED"].includes(race.status);
+  return NEUTRALISED.has(race.status);
 }
 
 function isRunning(car) {
@@ -239,23 +286,39 @@ function updateOrder() {
     r.leaderLap = Math.max(1, r.q.segment);
     return;
   }
-  const rank = c => (c.dsq ? 3 : c.status === "RETIRED" ? 2 : 0);
-
-  r.order = r.cars.slice().sort((a, b) => {
-    const ra = rank(a);
-    const rb = rank(b);
-    if (ra !== rb) return ra - rb;
-    if (ra === 2) return (b.laps - a.laps) || (b.retiredAt - a.retiredAt);
-    if (ra === 3) return a.grid - b.grid;
-    if (r.raceStart === null) return a.slot - b.slot;
-    if (a.laps !== b.laps) return b.laps - a.laps;
-    if (a.finished && b.finished) return a.finishTime - b.finishTime;
-    if (a.finished !== b.finished) return a.finished ? -1 : 1;
-    return progressOf(b) - progressOf(a);
-  });
+  // the sort keys once per car (not once per comparison)
+  for (const c of r.cars) {
+    c.orderRank = c.dsq ? 3 : c.status === "RETIRED" ? 2 : 0;
+    c.orderProgress = progressOf(c);
+  }
+  if (r.status === "RED" && r.redOrder) {
+    // red flag: the classification stands still at the moment of the red flag
+    // (the cars drive on into the pit lane, but no lap and no position counts)
+    const running = r.redOrder.filter(c => isRunning(c));
+    const others = r.cars.filter(c => !running.includes(c)).sort(compareRaceOrder);
+    r.order = running.concat(others);
+  } else {
+    r.order = r.cars.slice().sort(compareRaceOrder);
+  }
 
   const leader = r.order[0];
   r.leaderLap = leader ? clamp(leader.laps + 1, 1, r.totalLaps) : 1;
+}
+
+const GRID_PHASES = new Set(["PRE", "FORMATION", "GRID_READY", "START_SEQ"]);
+
+function compareRaceOrder(a, b) {
+  const ra = a.orderRank;
+  const rb = b.orderRank;
+  if (ra !== rb) return ra - rb;
+  if (ra === 2) return (b.laps - a.laps) || (b.retiredAt - a.retiredAt);
+  if (ra === 3) return a.grid - b.grid;
+  // before the start and before a standing restart (formation lap, grid, lights): grid order
+  if (race.raceStart === null || GRID_PHASES.has(race.phase)) return a.slot - b.slot;
+  if (a.laps !== b.laps) return b.laps - a.laps;
+  if (a.finished && b.finished) return a.finishTime - b.finishTime;
+  if (a.finished !== b.finished) return a.finished ? -1 : 1;
+  return b.orderProgress - a.orderProgress;
 }
 
 // Time gap between two cars, measured at the last timing point both have passed.
@@ -264,11 +327,51 @@ function gapBetween(car, carAhead) {
   const M = race.track.marshalSectors;
   const key = car.lastKey;
   if (key < 0 || carAhead.lastKey < 0) return null;
-  const lapsBehind = Math.floor((carAhead.lastKey - key) / M);
+  // Laps behind: from the real distance driven. The timing keys alone are wrong
+  // for a while after a (re)start: a car that crossed the line in the pit lane
+  // under a red flag already counts the next lap (skipLine) and its keys are a lap ahead.
+  const lapsBehind = car.pitStart || carAhead.pitStart
+    ? Math.floor((carAhead.lastKey - key) / M)
+    : Math.floor((progressOf(carAhead) - progressOf(car)) / race.track.length);
   if (lapsBehind >= 1) return "+" + lapsBehind + (lapsBehind === 1 ? " LAP" : " LAPS");
   const t = carAhead.pass[key];
   if (t === undefined) return null;
   return Math.max(0, car.pass[key] - t);
+}
+
+// ----- Gaps during a red flag -----
+// Under the red flag the cars drive into the pit lane, line up, do a formation
+// lap: the timing points of different laps get mixed up and the gaps jump around
+// (100 s and back). Like the real timing screens, the gaps are frozen at the red
+// flag and shown again when every car has passed a timing point after the restart.
+function freezeGaps() {
+  const r = race;
+  r.frozenGaps = {};
+  r.order.forEach((car, i) => {
+    if (i === 0) return;
+    r.frozenGaps[car.id] = { leader: gapBetween(car, r.order[0]), interval: gapBetween(car, r.order[i - 1]) };
+  });
+  r.redEndAt = null;
+}
+
+function updateGapFreeze() {
+  const r = race;
+  if (!r.frozenGaps || r.status === "RED" || r.redEndAt == null || r.phase !== "RACE") return;
+  const standing = r.resumeType === "STANDING";
+  if (standing && !(r.lastStart > r.redEndAt)) return; // the standing start has not happened yet
+  const since = standing ? r.lastStart : r.redEndAt;
+  // every running car has passed a timing point after the restart (cars still waiting
+  // in the pit lane have not – they keep the frozen gap)
+  const fresh = car => !isRunning(car) || car.finished || car.pitStart ||
+    (car.lastKey >= 0 && car.pass[car.lastKey] > since);
+  if (r.cars.every(fresh)) r.frozenGaps = null;
+}
+
+// The gap shown on the timing screen. kind: "leader" or "interval"
+function displayGap(car, carAhead, kind) {
+  const frozen = race.frozenGaps;
+  if (frozen) return frozen[car.id] ? frozen[car.id][kind] : null;
+  return gapBetween(car, carAhead);
 }
 
 // The time to write into the timing: the exact crossing moment if we know it
@@ -299,13 +402,18 @@ function simStep() {
     evaluationTick();
     adviceTick();
     fiaTick();          // time limits, heat, weather evaluation (fia-tools.js)
+    eventRulesTick();   // rules of the event notes (director.js)
+    marshalRainTick();  // the marshals show the rain signal (option, director.js)
+    if (r.frozenGaps) updateGapFreeze();
   }
   if (r.session === "QUALI") updateQualifying();
   else updateProcedures();
+  if (r.status !== r.prevStatus) statusChanged(r.prevStatus, r.status);
   processAutoClear();
   driveCars();
   runRaceTimers();
   updateObstacles();
+  if (Math.floor(r.time) !== Math.floor(r.time - DT)) radioTick(); // once per second
   runInjections();
   processWaitingInjections();
   updateClips();
@@ -313,6 +421,25 @@ function simStep() {
   updateOrder();
 }
 
+
+// The track status changed (any session). After a neutralisation the tyres have cooled
+// down: the longer the cars drove slowly, the longer the first metres after the restart
+// are slippery (under a red flag the tyres are in blankets – only a short effect).
+function statusChanged(from, to) {
+  const r = race;
+  r.prevStatus = to;
+  if (NEUTRALISED.has(to) && (!from || !NEUTRALISED.has(from))) r.coldSince = r.time;
+  if (to === "GREEN" && from && NEUTRALISED.has(from) && r.coldSince !== undefined) {
+    const slow = r.time - r.coldSince;
+    const wasRed = r.redSinceNeutral;
+    const cold = wasRed ? RED_FLAG_COLD : clamp(slow * RESTART_COLD_PER_SECOND, RESTART_COLD_MIN, RESTART_COLD_MAX) * (r.weather.trackTemp < COLD_TRACK_TEMP ? 1.3 : 1);
+    for (const car of r.cars) {
+      if (car.mode === "RACE" && !car.pit.state) car.coldTyres = Math.max(car.coldTyres, cold);
+    }
+    r.redSinceNeutral = false;
+  }
+  if (to === "RED") r.redSinceNeutral = true;
+}
 
 // =====================================================================
 //  4. PROCEDURES: lights, formation lap, VSC end, finish ...
@@ -354,12 +481,26 @@ function updateProcedures() {
   // ----- release cars from the pit lane after a red flag -----
   if (r.releaseQueue.length > 0 && r.time >= r.nextRelease && r.pitExitOpen) {
     const car = r.releaseQueue.shift();
-    car.pit.state = "OUT";
-    r.nextRelease = r.time + 1.3;
+    // only a car that is still waiting in the pit lane (a pit lane starter may have left already)
+    if (car.pit.state === "REDSTOP" || car.pit.state === "HOLD" || car.pit.state === "RED") {
+      car.pit.state = "OUT";
+      car.pitStart = false;
+      r.nextRelease = r.time + 1.3;
+    }
   }
 
   // ----- pit lane starters leave after the field has passed -----
   if (r.raceStart !== null && r.phase === "RACE") {
+    // reminder: the field has passed, but the pit exit is still closed and a car is waiting
+    if (!r.pitExitOpen && r.status !== "RED" && r.time - r.lastStart > 20) {
+      const waiting = r.cars.filter(c => (c.pitStart && c.pit.state === "HOLD") || (c.pit.state === "OUT" && c.mode === "RACE"));
+      r.evalData.exitWait += waiting.length * DT;
+      if (waiting.length && r.exitReminderFor !== r.lastStart) {
+        r.exitReminderFor = r.lastStart;
+        addAlert("warn", "The field has passed the pit exit – it is still closed. " + waiting.map(c => c.code).join(", ") +
+          " waiting at the red light. Open the pit exit (\"Pit exit\" button).");
+      }
+    }
     for (const car of r.cars) {
       if (car.pitStart && car.pit.state === "HOLD" && r.time - r.lastStart > 12 && r.pitExitOpen && !carApproachingPitExit()) {
         car.pit.state = "OUT";
@@ -380,13 +521,17 @@ function updateProcedures() {
 // Automatic "clear" of short marshal yellows (e.g. after a quick spin)
 function processAutoClear() {
   const r = race;
+  if (!r.autoClear.length) return;
+  let fired = false;
   for (const item of r.autoClear) {
     if (item.done || r.time < item.at) continue;
     item.done = true;
+    fired = true;
     const i = item.sector;
     const busy = r.obstacles.some(o => !o.cleared && o.sector === i + 1);
     if (!busy && r.sectorFlags[i] === "YELLOW" && r.flagSource[i] === "MARSHAL") setSectorFlag(i, "GREEN", "MARSHAL");
   }
+  if (fired) r.autoClear = r.autoClear.filter(item => !item.done); // the list does not grow all race long
 }
 
 function carApproachingPitExit() {
@@ -424,6 +569,7 @@ function lightsOut() {
   r.lastStart = r.time;
   r.status = "GREEN";
   r.starts++;
+  r.standingStartDone = true;
   r.drsEnabled = false;
   r.drsAdvised = false;
   publish(r.starts === 1 ? "RACE START" : "RACE RESUMED - STANDING START", "Info");
@@ -459,6 +605,7 @@ function afterNeutralisation() {
   r.drsAdvised = false;
   for (const car of r.cars) {
     car.unlapping = false;
+    car.catchingUp = false;
   }
 }
 
@@ -476,6 +623,9 @@ function finishRace() {
 // =====================================================================
 function updateWeather() {
   const r = race;
+  // rain washes the rubber off the track
+  const rainNow = r.weather.rain || 0;
+  if (rainNow > 0.05) r.rubber = Math.max(0, r.rubber - RUBBER_RAIN_WASH * rainNow * r.rubber);
   if (r.weather.model === "cells") {
     updateCellWeather(r);
     return;
@@ -499,7 +649,9 @@ function updateWeather() {
   if (w.rain > w.wet) {
     w.wet += (w.rain - w.wet) * 0.008;      // the track gets wet
   } else {
-    w.wet = Math.max(w.rain, w.wet - 0.0011 * (1 - w.rain)); // a dry line appears
+    // a dry line appears – faster with the cars running on it
+    const running = r.cars.filter(c => c.mode === "RACE" && !c.pit.state).length;
+    w.wet = Math.max(w.rain, w.wet - (0.0011 + 0.0004 * running / 20) * (1 - w.rain));
   }
 
   if (!w.raining && w.rain > 0.08) {
@@ -535,13 +687,21 @@ function tyreFactor(car) {
   let f = t.base * (1 - car.tyre.wear * 0.035 * deg);
   if (car.tyre.wear > 0.75) f *= 1 - (car.tyre.wear - 0.75) * 0.3 * deg; // the tyre "falls off the cliff"
   f *= wetGrip(car.tyre.compound, wetAt(car.s));
-  if (car.coldTyres > 0) f *= 0.975;
+  if (car.coldTyres > 0) f *= COLD_TYRE_GRIP;
+  if (car.tyre.graining) f *= GRAINING_GRIP; // grained surface: less grip until it cleans up
   return f;
+}
+
+// Hot track = more tyre wear, cold track = less (and a slower warm-up, see the cold tyres)
+function trackTempWear() {
+  const t = race.weather.trackTemp || 36;
+  return 1 + clamp((t - 35) * TRACK_TEMP_WEAR, -0.15, 0.25);
 }
 
 // 1.0 = an ideal car. Everything that makes the car slower reduces this number.
 function carFactor(car) {
-  let f = car.pace * tyreFactor(car) * (1 - car.fuel * 0.00032) * (1 - 0.1 * wetAt(car.s)) * car.lapNoise;
+  let f = car.pace * tyreFactor(car) * (1 - car.fuel * FUEL_EFFECT) * (1 - 0.1 * wetAt(car.s)) * car.lapNoise;
+  f *= 1 + RUBBER_PACE * (race.rubber - race.rubberRef); // track evolution over the weekend
   if (car.damage.wing) f *= 0.975;
   f *= 1 - car.damage.floor * 0.03;
   return f;
@@ -580,15 +740,19 @@ function desiredSpeed(car) {
   // coming into the pits: brake down to the pit lane speed before the speed line
   if (car.boxThisLap || r.status === "RED") {
     const d = mod(tr.pit.entry + 60 - car.s, L);
-    if (d < 420) v = Math.min(v, Math.sqrt(PIT_SPEED * PIT_SPEED + 2 * 16 * d));
+    if (d < 420) v = Math.min(v, Math.sqrt(pitLimitMs() * pitLimitMs() + 2 * 16 * d));
   }
 
   // neutralisations
   const st = r.status;
-  if (st === "VSC" || st === "VSC_ENDING") v = Math.min(v, profile * 0.64);
+  if (st === "VSC" || st === "VSC_ENDING") v = Math.min(v, profile * VSC_REF * (car.deltaPush || 1));
   if ((st === "SC" || st === "SC_ENDING") && !car.restartOk) {
-    if (car.unlapping) v = Math.min(v, profile * 0.8);
-    else v = Math.min(v, profile * 0.7, 62);
+    // an unlapped car catches up with the back of the queue at a higher speed
+    // (only behind a car of the queue – not behind another car that is still catching up)
+    const ahead = car.aheadCar;
+    if (car.catchingUp && car.gapAheadM < 80 && ahead && !ahead.catchingUp && !ahead.unlapping) car.catchingUp = false;
+    if (car.unlapping || car.catchingUp) v = Math.min(v, profile * 0.8);
+    else v = Math.min(v, Math.min(profile * SC_REF, SC_MAX_SPEED) * (car.deltaPush || 1));
 
     // after the safety car went into the pits, the leader controls the pace until the restart
     if (st === "SC_ENDING" && !r.sc && r.order[0] === car && !inRange(car.s, r.restartGo, L - 1, L)) {
@@ -599,12 +763,13 @@ function desiredSpeed(car) {
 
   // local yellow flags
   const index = marshalSectorAt(tr, car.s) - 1;
-  const flag = r.sectorFlags[index];
+  const flag = shownFlag(index);
   if (!car.ignoreFlags) {
     if (flag === "DOUBLE") v *= 0.9;
     else if (flag === "YELLOW") v *= 0.985;
   }
   if (r.slippery[index]) v *= 0.985;
+  if (rainShown(index) && wetAt(car.s) > 0.05) v *= 0.995; // rain signal: the drivers take more care
   return v;
 }
 
@@ -614,27 +779,74 @@ function pitLaneSpeed(car) {
   const tr = r.track;
   const L = tr.length;
   const p = car.pit;
-  const limit = PIT_SPEED * (1 + p.excess);
+  const limit = pitLimitMs() * (1 + p.excess);
   const intoLane = mod(car.s - tr.pit.entry, L);
 
   // brake from track speed down to the limit before the speed line (60 m into the lane)
   let v = limit;
   if (intoLane < 60) v = Math.max(limit, Math.sqrt(limit * limit + 2 * 16 * (60 - intoLane)));
 
-  if (p.state === "STOP" || p.state === "HOLD" || p.state === "REDSTOP" || p.state === "GARAGE") return 0;
+  if (p.state === "STOP" || p.state === "RELEASE" || p.state === "HOLD" || p.state === "REDSTOP" || p.state === "GARAGE") return 0;
   if (p.state === "IN" && p.reason !== "DT") {
-    const d = mod(p.boxS - car.s, L);
+    let d = mod(p.boxS - car.s, L);
+    // double stack: the team-mate is still in the box – wait right behind it
+    p.queued = boxBusy(car);
+    if (p.queued) {
+      d -= 9;
+      if (!p.stackNoted) {
+        p.stackNoted = true;
+        addAlert("info", "Double stack: " + carLabel(car) + " has to wait behind the team-mate in the " + car.team + " box.", { carId: car.id });
+      }
+    }
     if (d < L - 30) v = Math.min(v, Math.sqrt(2 * 12 * Math.max(0, d - 0.3)));
   }
+  // pit lane traffic: nobody drives through a car in front in the fast lane
+  if (p.state === "IN" || p.state === "OUT") v = Math.min(v, pitLaneFollow(car));
   if (p.state === "RED") {
     const d = mod(p.queueS - car.s, L);
     if (d < L - 30) v = Math.min(v, Math.sqrt(2 * 8 * Math.max(0, d - 0.3)));
   }
+  // red light at the pit exit: wait at the light, 8 m before the exit line.
+  // (Measured to the exit line: a car that crept a few cm past the stop point used to get
+  // a distance of almost a full lap, no limit any more – and drove out at red.)
   if (p.state === "OUT" && !r.pitExitOpen) {
-    const d = mod(tr.pit.exit - 8 - car.s, L);
-    if (d < L - 30) v = Math.min(v, Math.sqrt(2 * 10 * Math.max(0, d)));
+    const toExit = mod(tr.pit.exit - car.s, L);
+    if (toExit >= 1 && toExit < L - 30) {
+      const d = toExit - 8;
+      if (d <= 0.3) return 0;
+      v = Math.min(v, Math.sqrt(2 * 10 * (d - 0.3)));
+    }
   }
   return v;
+}
+
+// The team-mate is in the (shared) box: stopping or waiting for the release
+function boxBusy(car) {
+  for (const o of race.cars) {
+    if (o !== car && o.pit.boxS === car.pit.boxS && o.team === car.team && (o.pit.state === "STOP" || o.pit.state === "RELEASE")) return true;
+  }
+  return false;
+}
+
+// Moving cars in the fast lane of the pit lane (IN / OUT): keep a gap to the car in front
+function pitLaneFollow(car) {
+  const L = race.track.length;
+  let best = Infinity;
+  for (const o of race.cars) {
+    if (o === car || !(o.pit.state === "IN" || o.pit.state === "OUT") || o.mode !== car.mode) continue;
+    if (o.pit.queued && o.speed < 1) continue; // waiting for the box (double stack): at the side, not in the fast lane
+    const gap = mod(o.s - car.s, L);
+    if (gap <= 0 || gap > 45) continue;
+    best = Math.min(best, o.speed + Math.max(0, gap - 9) * 1.2);
+  }
+  return best;
+}
+
+// A car in its box may only be released when no car is coming in the fast lane
+function pitTrafficBehind(car) {
+  const L = race.track.length;
+  return race.cars.find(o => o !== car && (o.pit.state === "IN" || o.pit.state === "OUT") && o.speed > 3 &&
+    mod(car.s - o.s, L) > 0 && mod(car.s - o.s, L) < 25) || null;
 }
 
 // Accelerate / brake towards the target speed
@@ -686,16 +898,23 @@ function driveCars() {
     if (car.pit.state === "STOP") {
       car.pit.stopLeft -= DT;
       if (car.pit.stopLeft <= 0) finishPitStop(car);
+    } else if (car.pit.state === "RELEASE") {
+      releaseFromBox(car);
     }
 
-    const target = car.pit.state ? pitLaneSpeed(car) : desiredSpeed(car);
+    const target = car.pit.state ? pitLaneSpeed(car) : Math.min(desiredSpeed(car), followSpeed(car));
     approachSpeed(car, target);
   }
 
   // ----- b) cars can't drive through each other -----
+  updateRejoins();
   applyBlocking();
 
   // ----- c) move -----
+  // cars stalled on the grid (others must avoid them) – nobody stalls while the cars move
+  const stalled = r.stalledCars || (r.stalledCars = []);
+  stalled.length = 0;
+  for (const other of r.cars) if (other.stalled && other.launchDelay > 0) stalled.push(other);
   for (const car of r.cars) {
     if (car.speed <= 0) continue;
     if (!(car.mode === "RACE" || car.mode === "FORMATION" || car.mode === "COOLDOWN")) continue;
@@ -729,6 +948,10 @@ function driveCars() {
       car.targetLateral = car.slot % 2 === 0 ? -5 : 5;
     } else if (car.spin > 0 || car.mode === "STOPPED") {
       car.targetLateral = car.offTrackSide || 14;
+    } else if (crippled(car) && car.mode === "RACE" && !car.pit.state) {
+      car.targetLateral = (car.offTrackSide || 14) * 0.6; // off the racing line, the others pass
+    } else if (car.rejoinUntil > 0) {
+      car.targetLateral = (car.offTrackSide || 14) * 0.6; // at the side until the traffic has passed
     } else if (car.passing) {
       car.targetLateral = car.passing.side * 7;
     } else {
@@ -738,12 +961,72 @@ function driveCars() {
   }
 }
 
-// Cars that are physically on the track and can block others
-function blockingCars() {
+// A driver sees a slower car in front and brakes in time: the highest speed from which
+// the car can still brake down to the speed of the car in front before the minimum gap.
+// Without it the cars only reacted when they were already too close – applyBlocking then
+// had to cut the speed from 80 to 30 m/s in one step, and that ran down the whole queue
+// (it looked like the field stopping, e.g. after a slow launch at the start).
+function followSpeed(car) {
+  const a = car.aheadCar;
+  if (!a || car.unlapping || a.unlapping || (car.passing && car.passing.target === a)) return Infinity;
+  if (a.pit.state || a.spin > 0 || !(a.mode === "RACE" || a.mode === "FORMATION") || a.finished) return Infinity;
+  if (car.mode !== "RACE" && car.mode !== "FORMATION") return Infinity;
+  const gap = mod(a.s - car.s, race.track.length);
+  if (gap > 200) return Infinity;
+  const room = gap - minimumGap(car, false);
+  return a.speed + Math.sqrt(2 * FOLLOW_BRAKING * Math.max(0, room));
+}
+
+// A car rejoins the track (after a spin, out of the pit lane): it stays at the side
+// and only takes the racing line when no faster car is close behind (at most "seconds").
+// Without this, the car was suddenly "in front" of a car at 280 km/h, which had to
+// drop to its speed in one step.
+function startRejoin(car, seconds) {
+  car.rejoinUntil = race.time + seconds;
+}
+
+function updateRejoins() {
   const r = race;
-  return r.cars.filter(c =>
-    (c.mode === "RACE" || c.mode === "FORMATION") && !c.pit.state && c.spin <= 0 &&
-    !(c.stalled && c.launchDelay > 0) && !(c.formDelay > 0) && !c.finished && !c.pitStart);
+  const L = r.track.length;
+  for (const car of r.cars) {
+    if (!car.rejoinUntil) continue;
+    // under SC / VSC / red flag nobody races: the car simply joins the queue
+    if (r.time >= car.rejoinUntil || car.mode !== "RACE" || car.pit.state || r.status !== "GREEN") {
+      car.rejoinUntil = 0;
+      continue;
+    }
+    const traffic = r.cars.some(o => o !== car && o.mode === "RACE" && !o.pit.state && o.spin <= 0 &&
+      o.speed > car.speed + 6 && mod(car.s - o.s, L) < 60);
+    if (!traffic) car.rejoinUntil = 0;
+  }
+}
+
+// A car with a problem that drives slowly (puncture, failure, black flag): it leaves the
+// racing line and the others pass it – without a flag nobody has to stay behind it
+function crippled(car) {
+  return !!(car.damage.puncture || (car.failure && car.failure.slow) || car.flag === "BLACK");
+}
+
+// The corners of a track by position (buckets of 25 m) – a car only checks the corners it passes
+const CORNER_BUCKET = 25;
+function cornerBuckets(tr) {
+  if (tr.cornerBuckets && tr.cornerBuckets.corners === tr.corners) return tr.cornerBuckets;
+  const n = Math.max(1, Math.ceil(tr.length / CORNER_BUCKET));
+  const b = Array.from({ length: n }, () => []);
+  for (const c of tr.corners) b[Math.floor(mod(c.apex, tr.length) / CORNER_BUCKET) % n].push(c);
+  b.corners = tr.corners;
+  tr.cornerBuckets = b;
+  return b;
+}
+
+// Cars that are physically on the track and can block others
+function isBlocking(c) {
+  return (c.mode === "RACE" || c.mode === "FORMATION") && !c.pit.state && c.spin <= 0 && !(c.rejoinUntil > 0) && !crippled(c) &&
+    !(c.stalled && c.launchDelay > 0) && !(c.formDelay > 0) && !c.finished && !c.pitStart;
+}
+
+function blockingCars() {
+  return race.cars.filter(isBlocking);
 }
 
 function minimumGap(car, aheadIsSafetyCar) {
@@ -759,8 +1042,23 @@ function minimumGap(car, aheadIsSafetyCar) {
 function applyBlocking() {
   const r = race;
   const L = r.track.length;
-  const list = blockingCars().map(car => ({ car: car, s: car.s }));
-  if (r.sc) list.push({ sc: true, s: r.sc.s });
+  // (performance: the list and its entries are reused every step – no new objects 10× per second)
+  const list = r.blockList || (r.blockList = []);
+  const pool = r.blockPool || (r.blockPool = new Map());
+  list.length = 0;
+  for (const car of r.cars) {
+    if (!isBlocking(car)) continue;
+    let e = pool.get(car);
+    if (!e) pool.set(car, (e = { car }));
+    e.s = car.s;
+    list.push(e);
+  }
+  // the Safety Car heads the queue once it has picked up the leader (before that the cars are waved past)
+  if (r.sc && !r.sc.inPit && r.sc.pickedUp !== false) {
+    const e = r.scEntry || (r.scEntry = { sc: true });
+    e.s = r.sc.s;
+    list.push(e);
+  }
   if (list.length < 2) return;
   list.sort((a, b) => a.s - b.s);
   const n = list.length;
@@ -772,8 +1070,27 @@ function applyBlocking() {
     me.gap = mod(me.ahead.s - me.s, L);
     if (me.sc) continue;
     me.car.gapAheadM = me.gap;
+    me.car.aheadCar = me.ahead.sc ? null : me.ahead.car;
     me.car.slip = !me.ahead.sc && me.gap < 40 && trackSpeed(r.track, me.car.s) > r.track.vMax * 0.9;
     if (!me.ahead.sc && me.gap < 8 + me.car.speed * 0.45) considerOvertake(me.car, me.ahead.car);
+  }
+
+  // cars rejoining at the side of the track: nobody has to slow down for them,
+  // but they see the car in front and must not drive through it
+  for (const car of r.cars) {
+    if (!(car.rejoinUntil > 0 || crippled(car)) || car.pit.state || car.spin > 0 || car.mode !== "RACE") continue;
+    let ahead = null;
+    let gap = Infinity;
+    for (const o of list) {
+      const g = mod(o.s - car.s, L);
+      if (g > 0 && g < gap) { gap = g; ahead = o; }
+    }
+    if (!ahead) continue;
+    car.gapAheadM = gap;
+    car.aheadCar = ahead.sc ? null : ahead.car;
+    const aheadSpeed = ahead.sc ? r.sc.speed : ahead.car.speed;
+    const cap = Math.max((gap + aheadSpeed * DT - minimumGap(car, !!ahead.sc)) / DT, aheadSpeed * 0.9);
+    if (car.speed > cap) car.speed = Math.max(cap, car.speed - BLOCK_BRAKING * DT);
   }
 
   // slow down when too close to the car in front (two rounds, so it spreads through a queue)
@@ -788,7 +1105,18 @@ function applyBlocking() {
       if (!ahead.sc && ahead.car.unlapping) continue;
       const aheadSpeed = ahead.sc ? r.sc.speed : ahead.car.speed;
       const room = me.gap + aheadSpeed * DT - minimumGap(car, !!ahead.sc);
-      if (car.speed * DT > room) car.speed = Math.max(0, room / DT);
+      // Too close: drop back by going a bit slower than the car in front.
+      // (Stopping dead – speed 0 – while the car in front drives on at 100 km/h made
+      // cars "park" at the start when two of them were side by side, and the whole
+      // queue behind lost 100 m.) Slower than the car in front can never hit it.
+      const cap = Math.max(room / DT, aheadSpeed * 0.9);
+      if (car.speed > cap) {
+        // brake at most ~6 g (the car may be closer than the minimum gap for a moment);
+        // only a car that would touch the one in front is slowed down harder
+        // (side by side – gap below 2 m – the car drops back, it never stops dead behind a moving car)
+        const contact = Math.max((me.gap - 2) / DT + aheadSpeed, aheadSpeed * 0.7);
+        car.speed = Math.max(0, Math.min(Math.max(cap, car.speed - BLOCK_BRAKING * DT), contact));
+      }
     }
   }
 }
@@ -800,7 +1128,7 @@ function moveCar(car, from, to) {
   const L = tr.length;
 
   // stalled car on the grid: cars behind have to avoid it
-  for (const other of r.cars) {
+  for (const other of r.stalledCars || r.cars) {
     if (other.stalled && other.launchDelay > 0 && other !== car && car.mode === "RACE" &&
         passedPoint(from, to, other.s, L) && chance(0.03 * r.level)) {
       hitStalledCar(car, other);
@@ -819,6 +1147,7 @@ function moveCar(car, from, to) {
     r.stamp = null;
     return;
   }
+  if (r.session !== "QUALI") updateNeutralDelta(car);
 
   for (let k = 0; k < 2; k++) {
     if (passedPoint(from, to, tr.sectorBounds[k], L)) {
@@ -838,8 +1167,15 @@ function moveCar(car, from, to) {
   r.stamp = null;
 
   if (car.mode === "RACE" && !car.pit.state) {
-    for (const corner of tr.corners) {
-      if (passedPoint(from, to, corner.apex, L)) cornerEvents(car, corner);
+    // only the corners in the few metres of this step (25 m buckets, built once per track)
+    const cb = cornerBuckets(tr);
+    const nb = cb.length;
+    let bi = Math.floor(mod(from, L) / CORNER_BUCKET) % nb;
+    const last = Math.floor(mod(to, L) / CORNER_BUCKET) % nb;
+    for (let k = 0; k < nb; k++) {
+      for (const corner of cb[bi]) if (passedPoint(from, to, corner.apex, L)) cornerEvents(car, corner);
+      if (bi === last) break;
+      bi = (bi + 1) % nb;
     }
     updateAeroZones(car, from, to); // DRS zones or Straight Mode / Overtake Mode / battery (regs.js)
     // the team decides 300 m before the pit entry, so the driver can slow down in time
@@ -858,12 +1194,20 @@ function moveCar(car, from, to) {
 
   if (car.mode === "FORMATION") {
     car.formDist += distance;
+    // a pit lane starter turns into the pit lane at the end of the formation lap
+    if (car.pitLaneStart && !car.pitStart && !car.pit.state && car.formDist > 400 && passedPoint(from, to, tr.pit.entry, L)) {
+      enterPitForPitLaneStart(car);
+      return;
+    }
     const remaining = mod(car.slotS - car.s, L);
     if (!car.pit.state && car.formDist > 400 && (remaining < 0.6 || remaining > L - 20)) {
       car.s = car.slotS;
       car.speed = 0;
       car.mode = "GRID";
-      car.skipLine = true;
+      // the first crossing after the start is not a lap – except after Safety Car laps:
+      // then the cars are in the middle of a lap and the restart completes it
+      car.skipLine = !car.lapOnGrid;
+      car.lapOnGrid = false;
     }
   }
 
@@ -880,8 +1224,13 @@ function moveCar(car, from, to) {
     const neutral = isNeutralised() ? 0.3 : 1;
     const tyre = TYRES[car.tyre.compound] || TYRES.MEDIUM;
     const wetMismatch = tyre.slick ? 1 : (wetAt(car.s) < 0.2 ? 2.2 : 1); // wet tyres overheat on a dry track
+    // graining: cold slicks pushed hard at a circuit that is tough on the tyres
+    if (tyre.slick && car.coldTyres > 0 && !car.tyre.graining && neutral === 1 && chance(lapsDriven * GRAINING_RATE * Math.max(0, r.tyreStress - 0.45))) {
+      car.tyre.graining = car.laps + randInt(2, 4);
+    }
+    if (car.tyre.graining && car.laps >= car.tyre.graining) car.tyre.graining = 0;
     car.tyre.wear = Math.min(1, car.tyre.wear + lapsDriven * tyre.wear * r.wearScale * neutral *
-      (1.15 - car.tyreMgmt * 0.3) * wetMismatch);
+      (1.15 - car.tyreMgmt * 0.3) * wetMismatch * trackTempWear() * (car.tyre.graining ? GRAINING_WEAR : 1));
     car.fuel = Math.max(0, car.fuel - lapsDriven * r.fuelPerLap * (isNeutralised() ? 0.5 : 1));
   }
 }
@@ -899,6 +1248,12 @@ function crossLine(car) {
     return;
   }
 
+  // Red flag: the race stands still. A car that had just started a new lap drives
+  // (almost) a whole lap to the pit lane and crosses the line in the pit lane –
+  // that lap must not count, or it is a lap ahead of the cars behind it after
+  // the restart. No car completes more laps than the leader had at the red flag.
+  if (r.status === "RED" && r.redAtLaps !== undefined && car.laps >= r.redAtLaps) return;
+
   // safety car restart: green flag when the leader crosses the line
   if (r.status === "SC_ENDING" && !r.sc && r.order[0] === car) {
     r.status = "GREEN";
@@ -909,6 +1264,8 @@ function crossLine(car) {
 
   const now = timingNow();
   car.laps++;
+  // every lap lays down rubber (less on a wet track)
+  r.rubber = Math.min(1, r.rubber + RUBBER_PER_LAP * (1 - r.rubber) * (1 - wetAt(car.s)));
   const record = {
     lap: car.laps,
     time: now - car.lapStart,
@@ -918,6 +1275,8 @@ function crossLine(car) {
     compound: car.tyre.compound,
     valid: !car.invalidLaps[car.laps],
     pitLane: !!car.pit.state || car.pit.lastStopLap === car.laps - 1,
+    fuel: car.fuel, // for the fuel-corrected lap time (car panel)
+    neutral: isNeutralised(),
     t: now
   };
   car.lapTimes.push(record);
@@ -946,7 +1305,7 @@ function crossLine(car) {
   }
 
   // ----- things that can happen once per lap -----
-  if (r.raceStart !== null && chance(0.0007 * r.level * car.failureScale)) startFailure(car); // failureScale: reliability (championship)
+  if (r.raceStart !== null && chance(FAILURE_CHANCE * r.level * car.failureScale)) startFailure(car); // failureScale: reliability (championship)
   if (car.damage.wing && chance(0.08)) {
     addObstacle({ type: "DEBRIS", s: car.s + rand(200, 900), onTrack: true, required: rand(30, 70),
                   label: "parts from " + carLabel(car) });
@@ -967,15 +1326,82 @@ function finishCar(car) {
   }
 }
 
+// ---------- SC / VSC delta time ----------
+// Under a VSC (and under the Safety Car until a car is in the queue) every car must stay
+// slower than a minimum time. The delta is measured live: + = slower than the minimum time (ok),
+// − = too fast. Most drivers keep a small margin; a few push and go below it – the driver
+// sees it on the dash and backs off after a few seconds. A negative delta at the end of a
+// marshal sector is a breach: the incident reports the measured values.
+
+function neutralKey(r) {
+  if (r.status === "VSC" || r.status === "VSC_ENDING") return "V" + r.evalData.vscCount;
+  if (r.status === "SC") return "S" + r.evalData.scCount;
+  return null;
+}
+
+function updateNeutralDelta(car) {
+  const r = race;
+  const key = neutralKey(r);
+  if (!key) {
+    if (car.deltaKey) { car.deltaKey = null; car.delta = null; car.deltaPush = 1; }
+    return;
+  }
+  if (car.deltaKey !== key) {
+    // a new neutralisation: measured from the end of the grace time
+    car.deltaKey = key;
+    car.deltaFrom = r.time + DELTA_GRACE;
+    car.delta = 0;
+    car.deltaWorst = 0;
+    car.deltaSegs = 0;
+    car.deltaReported = false;
+    car.deltaPush = chance(DELTA_PUSH_CHANCE * r.level) ? rand(1.012, 1.04) : rand(0.986, 0.998);
+    car.deltaBackOff = null;
+  }
+  if (car.mode !== "RACE" || car.pit.state || car.finished || car.spin > 0) return;
+  if (r.time < car.deltaFrom) return;
+  // the Safety Car delta only counts until the car is in the queue (and not for cars allowed to catch up)
+  if (key[0] === "S" && (car.unlapping || car.catchingUp || car.restartOk || car.gapAheadM < 120)) return;
+  const profile = trackSpeed(r.track, car.s) * r.paceScale;
+  const vRef = key[0] === "V" ? profile * VSC_REF : Math.min(profile * SC_REF, SC_MAX_SPEED);
+  if (vRef <= 0) return;
+  car.delta += DT - car.speed * DT / vRef;
+  if (car.delta > 3) car.delta = 3; // the margin a driver keeps does not grow for ever on the dash
+  if (car.delta < car.deltaWorst) car.deltaWorst = car.delta;
+  // the driver sees a negative delta on the dash and backs off a few seconds later
+  if (car.delta < -0.05 && car.deltaPush > 1 && car.deltaBackOff === null) car.deltaBackOff = r.time + rand(2, 9);
+  if (car.deltaBackOff !== null && r.time >= car.deltaBackOff) {
+    car.deltaPush = rand(0.975, 0.99);
+    car.deltaBackOff = null;
+  }
+}
+
+// At the end of every marshal sector: was the car below the minimum time?
+function checkNeutralDelta(car, index) {
+  const r = race;
+  if (car.delta === null || car.delta === undefined || !car.deltaKey || car.delta >= -0.1) return;
+  car.deltaSegs++;
+  if (car.deltaReported) return;
+  car.deltaReported = true;
+  const vsc = car.deltaKey[0] === "V";
+  // the incident is written a few seconds later, with the worst delta and the number of segments
+  setTimeoutRace(8, () => {
+    if (race !== r) return;
+    const measured = { delta: -car.deltaWorst, segs: car.deltaSegs, sector: index + 1 };
+    if (vsc) vscDeltaIncident(car, index, null, measured);
+    else rdInstructionIncident([car], "SC_DELTA", null, measured);
+  });
+}
+
 // The car enters a new marshal sector
 function enterMarshalSector(car, index) {
   const r = race;
   if (car.mode !== "RACE") return;
   recordPassing(car, index);
+  (r.linePasses || (r.linePasses = []))[index] = ((r.linePasses[index]) || 0) + 1; // drying line (weather.js)
   car.ignoreFlags = false;
   if (car.pit.state || car.finished || car.spin > 0) return;
 
-  const flag = r.sectorFlags[index];
+  const flag = shownFlag(index); // what the light panels show (1–2 s after Race Control set it)
 
   if (r.session === "QUALI") {
     if (flag !== "GREEN") qualiYellow(car, index, flag);
@@ -996,9 +1422,8 @@ function enterMarshalSector(car, index) {
     car.ignoreFlags = true;
     doubleYellowIncident(car, index);
   }
-  if (r.status === "VSC" && chance(0.003 * r.level)) vscDeltaIncident(car, index);
-  if (r.status === "SC" && !car.restartOk && !car.unlapping && chance(0.0005 * r.level)) rdInstructionIncident([car], "SC_DELTA");
-  if (r.status === "SC" && !car.restartOk && !car.unlapping && chance(0.0006 * r.level)) {
+  checkNeutralDelta(car, index); // SC / VSC delta: measured, not random
+  if (r.status === "SC" && !car.restartOk && !car.unlapping && !car.catchingUp && chance(0.0006 * r.level)) {
     const victim = carDirectlyAhead(car);
     if (victim && car.gapAheadM < 40) safetyCarOvertakeIncident(car, victim);
   }
@@ -1035,6 +1460,16 @@ function zoneType(track, s) {
   if (later < v * 0.93) return "BRAKING";
   if (v > track.vMax * 0.9) return "STRAIGHT";
   return "CORNER";
+}
+
+// Calibration: cars that are too close no longer stop dead (applyBlocking), so they
+// stay in a fight more often. This keeps the number of overtakes at the level the
+// modes were calibrated for (championship ~40–70 per Grand Prix). Measured over
+// 6 races per point: overtakeScale 0.2 -> 1.0, 0.45 -> 0.85, 1 (fictional) -> 0.25.
+function overtakeAttemptRate(scale) {
+  if (scale <= 0.2) return 1;
+  if (scale <= 0.45) return 1 - (scale - 0.2) / 0.25 * 0.15;
+  return Math.max(0.25, 0.85 - (scale - 0.45) / 0.55 * 0.6);
 }
 
 function considerOvertake(me, ahead) {
@@ -1081,10 +1516,11 @@ function considerOvertake(me, ahead) {
   p *= zone === "BRAKING" ? 2.5 : zone === "STRAIGHT" ? 1.0 : 0.25;
   p *= 0.6 + me.aggression * 0.8;
   p *= r.overtakeScale;
+  p *= overtakeAttemptRate(r.overtakeScale);
   p *= 1.25 - ahead.racecraft * 0.5;
 
   const sector = marshalSectorAt(r.track, me.s) - 1;
-  const yellow = r.sectorFlags[sector] !== "GREEN";
+  const yellow = shownFlag(sector) !== "GREEN";
   if (yellow) p *= 0.03; // drivers (almost) never overtake under yellow
   if (!chance(p)) return;
 
@@ -1138,15 +1574,17 @@ function cornerEvents(car, corner) {
   const sector = marshalSectorAt(r.track, corner.apex) - 1;
   const oil = r.obstacles.some(o => !o.cleared && o.type === "OIL" && o.sector === sector + 1);
 
-  let p = 0.0002 * r.level * (1.5 - car.consistency) * (1 + 40 * mismatch * mismatch) * (1 + 10 * w * w);
+  let p = SPIN_CHANCE * r.level * (1.5 - car.consistency) * (1 + 40 * mismatch * mismatch) * (1 + 10 * w * w);
   if (car.tyre.wear > 0.8) p *= 3;
   if (car.coldTyres > 0) p *= 2.5;
   if (oil) p *= 6;
   if (r.slippery[sector]) p *= 1.5;
+  if (rainShown(sector) && w > 0.05) p *= 0.75; // warned by the rain signal: fewer mistakes
   if (car.damage.wing || car.damage.floor > 0.3) p *= 2;
   if (car.laps === 0 && r.session === "RACE") p *= 1.5;
-  if (r.session === "QUALI" && car.q.phase === "PUSH") p *= 1.5; // drivers take more risk on a push lap
-  if (r.session === "QUALI" && car.q.phase !== "PUSH") p *= 0.3;
+  // drivers are on the limit on a push lap (qualifying: everything on one lap; practice: runs)
+  if (r.session === "QUALI" && car.q.phase === "PUSH") p *= r.q.practice ? SPIN_PUSH_PRACTICE : SPIN_PUSH_QUALI;
+  if (r.session === "QUALI" && car.q.phase !== "PUSH") p *= SPIN_SLOW_LAP;
   p *= 1 + 3 * windRisk(r.track, corner.apex); // gusts in fast corners
   if (r.heatStress) p *= 1.3;                    // heat hazard not declared: tired drivers
   if (isNeutralised()) p *= 0.1;
@@ -1157,14 +1595,19 @@ function cornerEvents(car, corner) {
   }
 
   // track limits at the exit of some corners (in qualifying only push laps matter, and they push harder)
-  const tlChance = r.session === "QUALI" ? (car.q.phase === "PUSH" && !car.q.aborted ? 0.012 : 0) : 0.004;
-  if (corner.trackLimits && r.status === "GREEN" && chance(tlChance * r.level * (0.6 + car.aggression) * (1 + car.tyre.wear))) {
+  const tlChance = r.session === "QUALI" ? (car.q.phase === "PUSH" && !car.q.aborted ? TRACK_LIMITS_CHANCE_QUALI : 0) : TRACK_LIMITS_CHANCE;
+  if (cornerMonitored(corner) && r.status === "GREEN" && chance(tlChance * (corner.trackLimits ? 1 : 0.35) * r.level * (0.6 + car.aggression) * (1 + car.tyre.wear))) {
     createTrackLimits(car, corner, {});
   }
 }
 
 // A spin can end in very different ways
 function spinOutcome(car, corner) {
+  // on a qualifying push lap a mistake more often ends in the barrier
+  if (race.session === "QUALI" && car.q.phase === "PUSH" && chance(QUALI_PUSH_CRASH)) {
+    crashCar(car, corner, "lost the car on a push lap", false);
+    return;
+  }
   const roll = random();
   if (roll < 0.6) {
     spinCar(car, corner, "spun");
@@ -1187,7 +1630,6 @@ function spinCar(car, corner, what) {
   closeAero(car);
   car.offTrackSide = chance(0.5) ? 16 : -16;
   car.spinCheck = true;
-  car.lastSpinAt = r.time;
   const sector = marshalSectorAt(r.track, car.s);
   addAlert("warn", carLabel(car) + " " + what + " at " + corner.name + " (sector " + sector + ").", { carId: car.id, s: car.s, sector });
   marshalYellow(sector - 1, 15);
@@ -1203,6 +1645,7 @@ function spinCar(car, corner, what) {
 // After a spin the driver rejoins – sometimes in a dangerous way
 function afterSpin(car) {
   const r = race;
+  if (car.mode === "RACE") startRejoin(car, 8);
   if (!car.spinCheck || car.mode !== "RACE") return;
   car.spinCheck = false;
   const L = r.track.length;
@@ -1215,12 +1658,12 @@ function crashCar(car, corner, reason, brakeFailure) {
   const r = race;
   car.offTrackSide = chance(0.5) ? 18 : -18;
   const onTrack = chance(0.25);
-  retireCar(car, (brakeFailure ? "Brake failure – crashed at " : "Crashed at ") + corner.name, { onTrack, crash: true });
+  retireCar(car, (brakeFailure ? "Brake failure – crashed at " : "Crashed at ") + corner.name, { onTrack, crash: true, impact: rand(25, 70) });
   addAlert("danger", "CRASH: " + carLabel(car) + " " + reason + " and hit the barrier at " + corner.name + ".",
     { carId: car.id, s: car.s, sector: marshalSectorAt(r.track, car.s) });
 
   if (chance(0.15)) {
-    addObstacle({ type: "BARRIER", s: car.s, onTrack: false, required: rand(250, 420), label: "damaged barrier at " + corner.name });
+    addObstacle({ type: "BARRIER", s: car.s, onTrack: false, required: rand(WORK_TIME.BARRIER[0], WORK_TIME.BARRIER[1]), label: "damaged barrier at " + corner.name });
     addAlert("danger", "Marshal post " + marshalSectorAt(r.track, car.s) + ": the barrier at " + corner.name +
       " is badly damaged and must be repaired (needs a Safety Car or red flag).", { s: car.s });
   }
@@ -1298,11 +1741,21 @@ function retireCar(car, reason, opts) {
   const sector = marshalSectorAt(r.track, car.s);
   addObstacle({
     type: "CAR", s: car.s, onTrack: !!opts.onTrack, carId: car.id, crash: !!opts.crash,
-    required: opts.onTrack ? rand(70, 140) : rand(50, 120),
+    required: opts.onTrack ? rand(WORK_TIME.CAR_ON_TRACK[0], WORK_TIME.CAR_ON_TRACK[1]) : rand(WORK_TIME.CAR_OFF[0], WORK_TIME.CAR_OFF[1]),
     label: "the car of " + car.name + " (" + car.number + ")"
   });
+  // a heavy impact: the medical car must go to the driver, then the medical check (incidents.js)
+  if (opts.crash) {
+    car.impactG = Math.round(opts.impact || rand(12, 55));
+    if (car.impactG >= HEAVY_IMPACT_G) {
+      addObstacle({ type: "MEDICAL", s: car.s + 2, onTrack: !!opts.onTrack, required: rand(WORK_TIME.MEDICAL[0], WORK_TIME.MEDICAL[1]), medicalCarId: car.id,
+        label: "medical check of " + car.name });
+      addAlert("danger", "HEAVY IMPACT (~" + car.impactG + " g): " + carLabel(car) + " – the driver must be checked by the medical team. Send the medical car (needs a Safety Car or a red flag).",
+        { carId: car.id, s: car.s, sector: sector });
+    }
+  }
   if (opts.crash && chance(0.6)) {
-    addObstacle({ type: "DEBRIS", s: car.s + rand(-20, 30), onTrack: true, required: rand(40, 90), label: "debris at " + locationName(r.track, car.s) });
+    addObstacle({ type: "DEBRIS", s: car.s + rand(-20, 30), onTrack: true, required: rand(WORK_TIME.DEBRIS[0], WORK_TIME.DEBRIS[1]), label: "debris at " + locationName(r.track, car.s) });
   }
   addAlert(opts.onTrack ? "danger" : "warn",
     carLabel(car) + " has stopped " + (opts.onTrack ? "ON THE TRACK" : "in the run-off area") + " at " +
@@ -1341,14 +1794,51 @@ function wantsToPit(car) {
   if (slick && w > 0.28 && chance(0.55)) return "TYRES";
   if (compound === "INTERMEDIATE" && w > 0.82 && chance(0.4)) return "TYRES";
   if (compound === "WET" && w < 0.45 && chance(0.5)) return "TYRES";
-  if (!slick && w < 0.12 && r.weather.rain < 0.05 && chance(0.45)) return "TYRES";
+  if (!slick && r.weather.rain < 0.05 && slickCall(car, w)) return "TYRES";
 
   if (lapsLeft <= 3) return null;
   if (car.tyre.wear > 0.78) return "TYRES";
   const next = car.plan[0];
   if (next && car.laps + 1 >= next.lap) return "TYRES";
-  if (neutral && next && next.lap - car.laps <= 8 && car.laps - car.pit.lastStopLap > 5 && chance(0.75)) return "TYRES";
+  if (neutral && next && next.lap - car.laps <= 8 && car.laps - car.pit.lastStopLap > 5 && !stayOutUnderNeutral(car)) return "TYRES";
   return null;
+}
+
+// The crossover from intermediates to slicks on a drying track: one brave team gambles
+// first (usually a car further back – little to lose), the others follow when the cars
+// on slicks are faster than their own lap times.
+function slickCall(car, w) {
+  const r = race;
+  if (w > 0.22) return false;
+  if (!r.gambleTeam && w < 0.24) {
+    const back = r.order.filter(c => c.mode === "RACE").slice(Math.floor(r.order.length / 2));
+    r.gambleTeam = back.length ? pick(back).team : "-";
+  }
+  if (car.team === r.gambleTeam && w < 0.2 && chance(0.4)) return true;
+  if (w < 0.12 && chance(0.45)) return true;
+  // the timing screens: a car on slicks did a faster lap than this car
+  const mine = car.lastLap && !car.lastLap.pitLane && !car.lastLap.neutral ? car.lastLap.time : Infinity;
+  for (const o of r.cars) {
+    if (o === car || !o.lastLap || o.lastLap.pitLane || !TYRES[o.lastLap.compound].slick || r.time - o.lastLap.t > 150) continue;
+    if (o.lastLap.time < mine - 0.3) return chance(0.7);
+  }
+  return false;
+}
+
+// Under a SC / VSC the stop is cheap – but some teams stay out for track position
+// (decided once per neutralisation: a car near the front with tyres that are still good,
+// or a car that gains places when the others stop).
+function stayOutUnderNeutral(car) {
+  const r = race;
+  const key = r.status[0] + (r.evalData.scCount + r.evalData.vscCount);
+  if (car.scCall && car.scCall.key === key) return car.scCall.stay;
+  const pos = r.order.indexOf(car) + 1;
+  let p = 0.25;
+  if (pos <= 3 && car.tyre.wear < 0.55) p = 0.45;       // keep the lead / the podium place
+  else if (pos > r.cars.length * 0.6) p = 0.35;         // gain places when the others stop
+  if (car.tyre.wear > 0.65) p *= 0.3;
+  car.scCall = { key, stay: chance(p) };
+  return car.scCall.stay;
 }
 
 function pitEntryDecision(car) {
@@ -1370,6 +1860,12 @@ function pitEntryDecision(car) {
     }
     return;
   }
+  // double stack: the team-mate stops this lap too. Teams avoid it – except under SC / VSC,
+  // where the cheap stop is worth the wait behind the team-mate.
+  if (reason === "TYRES" && !isNeutralised()) {
+    const mate = r.cars.find(o => o !== car && o.team === car.team && (o.boxThisLap || (o.pit.state && o.pit.state !== "OUT")));
+    if (mate && chance(DOUBLE_STACK_AVOID)) return; // the team keeps this car out for one more lap
+  }
   car.boxThisLap = reason; // "box, box"
 }
 
@@ -1377,7 +1873,9 @@ function enterPit(car, reason) {
   const r = race;
   const p = car.pit;
   p.reason = reason;
-  p.excess = reason !== "RED" && chance(0.02 * r.level) ? rand(0.005, 0.07) : 0;
+  p.stackNoted = false;
+  p.queued = false;
+  p.excess = reason !== "RED" && chance(SPEEDING_CHANCE * r.level) ? rand(0.005, 0.07) : 0;
   p.maxSpeed = 0;
   p.speedChecked = false;
   closeAero(car);
@@ -1432,7 +1930,7 @@ function updatePitCar(car) {
     if (d < 0.5 || d > L - 30) {
       car.s = p.queueS;
       car.speed = 0;
-      p.state = "REDSTOP";
+      p.state = p.reason === "PITSTART" ? "HOLD" : "REDSTOP"; // a pit lane starter waits for the start
     }
   } else if (p.state === "OUT") {
     if (r.status === "RED" && r.session === "RACE") {
@@ -1449,11 +1947,12 @@ function updatePitCar(car) {
 function pitStopDuration(car) {
   const p = car.pit;
   if (p.reason === "SG") return 10;
-  let t = rand(2.0, 3.1);
-  p.slow = false;
-  if (chance(0.05)) {
-    t += rand(2, 8);
-    p.slow = true; // problem with a wheel nut
+  let t = rand(PIT_STOP_TIME[0], PIT_STOP_TIME[1]);
+  p.slowStop = null;
+  if (chance(SLOW_STOP_CHANCE)) {
+    t += rand(SLOW_STOP_EXTRA[0], SLOW_STOP_EXTRA[1]);
+    // problem with a wheel nut
+    p.slowStop = pick(["front-left", "front-right", "rear-left", "rear-right"]);
   }
   if (car.damage.wing || car.flag === "BO") t += rand(5, 9); // new front wing
   if (car.pen.time > 0) {
@@ -1476,9 +1975,15 @@ function finishPitStop(car) {
       p.servedNow = 0;
     }
     const compound = chooseCompound(car);
+    const wasSlick = TYRES[car.tyre.compound] && TYRES[car.tyre.compound].slick;
     car.tyre = { compound, age: 0, wear: 0 };
     if (!car.tyresUsed.includes(compound)) car.tyresUsed.push(compound);
-    car.coldTyres = 25;
+    car.coldTyres = COLD_TYRE_SECONDS * ((r.weather.trackTemp || 36) < COLD_TRACK_TEMP ? 1.3 : 1); // a cold track: the tyres take longer to warm up
+    // the crossover: the first car on slicks after the rain
+    if (TYRES[compound].slick && !wasSlick && !r.firstSlickDone && r.session === "RACE") {
+      r.firstSlickDone = true;
+      addAlert("info", carLabel(car) + " is the first car to switch to slick tyres – damp patches remain on the track.", { carId: car.id });
+    }
     car.damage.wing = false;
     car.damage.puncture = false;
     if (car.flag === "BO") car.flag = null;
@@ -1487,12 +1992,31 @@ function finishPitStop(car) {
   p.stops++;
   p.lastStopLap = car.laps;
   r.pitStops++;
-  p.state = "OUT";
+  // a slow stop (wheel nut): the timing screens show it
+  if (p.slowStop) {
+    addAlert("info", "Slow stop: " + carLabel(car) + " – problem with the " + p.slowStop + " wheel nut (" + p.stopTotal.toFixed(1) + " s stationary).", { carId: car.id });
+    p.slowStop = null;
+  }
+  // the release: the mechanics wait until the fast lane is clear – sometimes they release too early
+  p.state = "RELEASE";
+  p.releaseEarly = chance(UNSAFE_RELEASE_CHANCE * r.level);
+  p.releaseSince = r.time;
+  releaseFromBox(car);
+}
 
-  // unsafe release: the car is sent out into the path of another car in the pit lane
-  const other = r.cars.find(o => o !== car && (o.pit.state === "IN" || o.pit.state === "OUT") &&
-    mod(car.s - o.s, L) > 0 && mod(car.s - o.s, L) < 25);
-  if (other && chance(0.25 * r.level)) unsafeReleaseIncident(car, other, chance(0.3));
+function releaseFromBox(car) {
+  const p = car.pit;
+  const other = pitTrafficBehind(car);
+  if (!other) {
+    p.state = "OUT";
+    return;
+  }
+  if (p.releaseEarly) {
+    // unsafe release: the car is sent out into the path of another car in the pit lane
+    p.state = "OUT";
+    p.releaseEarly = false;
+    unsafeReleaseIncident(car, other, chance(0.3));
+  }
 }
 
 function leavePitLane(car) {
@@ -1504,8 +2028,13 @@ function leavePitLane(car) {
   p.reason = null;
   p.excess = 0;
   p.maxSpeed = 0;
-  if (car.pitStart) car.pitStart = false;
-  if (car.mode === "RACE" && !car.finished && chance(0.008 * r.level)) pitExitLineIncident(car);
+  if (car.pitStart) {
+    car.pitStart = false;
+    car.pitLaneStart = false; // the pit lane start is done (not again at a later standing restart)
+  }
+  if (car.mode === "RACE") startRejoin(car, 6); // the pit exit lane runs next to the track
+  if (car.mode === "RACE" && !car.finished && !(r.eventNotes && r.eventNotes.pitExitLine === false) && chance(0.008 * r.level)) pitExitLineIncident(car);
+  if (r.session === "QUALI" && car.mode === "RACE") practiceStartCheck(car);
   if (car.finished) {
     car.mode = "PARKED";
     car.hidden = true;
@@ -1515,7 +2044,7 @@ function leavePitLane(car) {
 function checkPitSpeed(car) {
   const p = car.pit;
   if (p.speedChecked) return;
-  if (p.maxSpeed > PIT_SPEED + 0.06) {
+  if (p.maxSpeed > pitLimitMs() + 0.06) {
     p.speedChecked = true;
     pitSpeedingIncident(car, p.maxSpeed * 3.6);
   }
@@ -1547,10 +2076,27 @@ function moveSafetyCar() {
   if (!sc) return;
   const tr = r.track;
   const L = tr.length;
-
-  let target = Math.min(trackSpeed(tr, sc.s) * r.paceScale * 0.6, 58);
   const leader = r.order.find(c => c.mode === "RACE" && !c.pit.state && isRunning(c));
-  if (leader) {
+
+  // 1. like in real life the Safety Car leaves the pit lane: it waits at the pit exit
+  //    until no car is coming, then joins the track
+  if (sc.inPit) {
+    const coming = r.cars.some(c => c.mode === "RACE" && !c.pit.state && c.speed > 5 && mod(sc.s - c.s, L) < SC_JOIN_GAP);
+    if (coming && r.time - sc.since < SC_MAX_PIT_WAIT) return;
+    sc.inPit = false;
+    sc.speed = 15;
+    publish("SAFETY CAR LEAVING THE PIT LANE", "SafetyCar");
+  }
+
+  // 2. until the leader is right behind it the Safety Car drives slowly and waits; the cars
+  //    that come up behind it before the leader are waved past (applyBlocking ignores it)
+  if (!sc.pickedUp && leader && mod(sc.s - leader.s, L) < SC_PICKUP_GAP) {
+    sc.pickedUp = true;
+    addAlert("info", "The Safety Car has picked up the leader (" + carLabel(leader) + "). The field closes up behind it.", { carId: leader.id });
+  }
+  let target = Math.min(trackSpeed(tr, sc.s) * r.paceScale * 0.6, 58);
+  if (!sc.pickedUp) target = Math.min(trackSpeed(tr, sc.s) * r.paceScale * SC_WAIT_PACE, 35);
+  else if (leader) {
     const gap = mod(sc.s - leader.s, L);
     if (gap > 400 && gap < L / 2) target *= 0.6; // wait for the leader
   }
@@ -1560,7 +2106,10 @@ function moveSafetyCar() {
   const to = sc.s + sc.speed * DT;
   if (sc.inLap && passedPoint(from, to, tr.pit.entry, L)) {
     r.sc = null;
-    r.scInPit = true;
+    if (r.scStandingStart) {
+      standingStartAfterSc(); // director.js: the cars line up on the grid
+      return;
+    }
     r.restartGo = mod(-rand(250, 700), L);
     addAlert("info", "The Safety Car has entered the pit lane. The leader now controls the pace until the restart.");
     return;
@@ -1571,7 +2120,10 @@ function moveSafetyCar() {
   for (const car of r.cars) {
     if (!car.unlapping) continue;
     car.unlapLeft -= car.speed * DT - sc.speed * DT;
-    if (car.unlapLeft < -40) car.unlapping = false;
+    if (car.unlapLeft < -40) {
+      car.unlapping = false;
+      car.catchingUp = true; // now catch up with the back of the queue (faster than the field)
+    }
   }
 }
 
@@ -1595,7 +2147,7 @@ function updateBlueFlags() {
     if (behind === car) continue;
     const gapM = mod(car.s - behind.s, L);
     const lapping = progressOf(behind) - progressOf(car) > L * 0.5;
-    const close = gapM < Math.max(behind.speed, 30) * 1.2;
+    const close = gapM < Math.max(behind.speed, 30) * (r.blueGap || 1.2); // event notes: blue flag gap
 
     if (lapping && close) {
       if (!car.blue.active) {
@@ -1638,6 +2190,18 @@ function evaluationTick() {
   if (!neutral) r.neutralSince = r.time;
   const reason = r.obstacles.some(o => !o.cleared) || (r.weather.wetMax !== undefined ? r.weather.wetMax : r.weather.wet) > 0.75 || r.weather.lightningKm < LIGHTNING_KM;
   if (neutral && !reason && r.time - r.neutralSince > 90) e.neutralNoReason++;
+
+  // rain in a sector without the rain signal (or the slippery flag) – counted after 30 s
+  const w = r.weather;
+  let unsignalled = false;
+  for (let i = 0; i < r.sectorFlags.length; i++) {
+    const rain = w.rainS ? w.rainS[i] : w.rain;
+    if (rain > 0.15 && !rainShown(i) && !r.slippery[i]) { unsignalled = true; break; }
+  }
+  if (unsignalled && r.status !== "RED") {
+    r.rainUnsignalledFor = (r.rainUnsignalledFor || 0) + 1;
+    if (r.rainUnsignalledFor > 30) e.rainUnsignalled = (e.rainUnsignalled || 0) + 1;
+  } else r.rainUnsignalledFor = 0;
 }
 
 
@@ -1663,6 +2227,16 @@ function updateClips() {
   for (const inc of r.incidents) {
     if (!inc.clip && r.time >= inc.clipAt) {
       inc.clip = r.history.filter(f => f.t >= inc.t - 8 && f.t <= inc.clipAt);
+      r.ver++;
+    }
+  }
+  // track limits reports: a short replay of the corner (only the newest reports can still need one)
+  for (let i = r.trackLimits.length - 1; i >= 0; i--) {
+    const tl = r.trackLimits[i];
+    if (r.time - tl.t > 15) break;
+    if (!tl.clip && tl.clipAt !== undefined && r.time >= tl.clipAt) {
+      // only the car of the report and the cars near it (keeps the stored report small)
+      tl.clip = r.history.filter(f => f.t >= tl.t - 5 && f.t <= tl.clipAt).map(f => ({ t: f.t, sc: f.sc, cars: f.cars }));
       r.ver++;
     }
   }

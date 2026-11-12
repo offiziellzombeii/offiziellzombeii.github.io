@@ -59,7 +59,8 @@ function abandonSession(reason) {
     r.status = r.status === "RED" ? "RED" : r.status;
     r.finished = true;
     publish("SESSION WILL NOT BE RESUMED", "Info");
-    addAlert("info", completed === 0
+    if (q.practice) addAlert("info", q.practice + " ended early – the times set so far stand.");
+    else addAlert("info", completed === 0
       ? "Qualifying abandoned before " + segName(1) + " was completed – the grid will be decided by the stewards (championship order)."
       : "Qualifying abandoned – the grid is taken from the last completed segment (" + segName(completed) + ").");
     r.ver++;

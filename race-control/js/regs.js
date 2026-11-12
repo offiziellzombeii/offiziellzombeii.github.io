@@ -22,15 +22,10 @@
 // =====================================================================
 
 const REGS_INFO = {
-  GE2023:  { name: "2023–2025 · ground effect + DRS", short: "2023–25", aid: "DRS" },
+  GE2023:  { name: "2011-2025 · DRS + non hybrid", short: "2011–25", aid: "DRS" },
   GEN2026: { name: "2026 · active aero + 50/50 hybrid", short: "2026", aid: "Overtake Mode" }
 };
 
-const DRS_SPEED = 1.035;           // top speed gain with DRS open
-const STRAIGHT_MODE_SPEED = 1.025; // top speed gain with Straight Mode (all cars)
-const OVERTAKE_SPEED = 1.015;      // extra speed with Overtake Mode on the fast parts of the lap
-const CLIPPING_SPEED = 0.97;       // empty battery on a straight
-const RECHARGE_SPEED = 0.995;      // the driver saves energy (lift and coast)
 
 function is2026() {
   return !!race && race.regs === "GEN2026";
@@ -177,10 +172,10 @@ function updateAeroZones(car, from, to) {
 
   if (!is2026()) {
     // ----- DRS -----
-    for (const zone of tr.drsZones) {
+    tr.drsZones.forEach((zone, zi) => {
       if (passedPoint(from, to, zone.detect, L)) {
         const timeGap = car.gapAheadM / Math.max(car.speed, 10);
-        car.drsEligible = r.drsEnabled && r.status === "GREEN" && zoneIsGreen(tr, zone) &&
+        car.drsEligible = r.drsEnabled && r.status === "GREEN" && zoneIsGreen(tr, zone) && !(r.drsOff && r.drsOff[zi]) &&
           (quali ? car.q.phase === "PUSH" : timeGap < 1.0);
       }
       if (passedPoint(from, to, zone.start, L)) car.drsOpen = car.drsEligible && r.drsEnabled && r.status === "GREEN";
@@ -188,7 +183,7 @@ function updateAeroZones(car, from, to) {
         car.drsOpen = false;
         car.drsEligible = false;
       }
-    }
+    });
     const wetHere = wetAt(car.s);
     if (car.drsOpen && wetHere > 0.35 && chance(0.004 * wetHere)) {
       spinCar(car, cornerAt(tr, car.s), "lost the rear with DRS open on a wet track");

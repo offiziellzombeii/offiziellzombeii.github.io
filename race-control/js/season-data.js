@@ -4,12 +4,12 @@
 //  1. The character of every real circuit (what the cars need there,
 //     how likely rain / heat / wind are)
 //  2. Points systems and the FIA rulebook defaults
-//  3. Helpers to read the generated catalogue (season-catalogue.js)
-//  4. buildCatalogueFromOpenF1(): regenerates the catalogue
+//  3. Helpers to read the catalogue (merged from the data packs, data-registry.js)
+//  4. buildCatalogueFromOpenF1(): regenerates the data of the core pack
 // =====================================================================
 
 // ---------- 1. Circuit character ----------
-// 0 ... 1 values:
+// Comes from the data packs (data-registry.js, CIRCUIT_CHARACTER). 0 ... 1 values:
 //   power      = how much a strong power unit / low drag counts (Monza = 1)
 //   downforce  = how much downforce / mechanical grip counts (Monaco = 1)
 //   tyres      = tyre stress (abrasive surface, high-energy corners)
@@ -19,37 +19,7 @@
 //   air        = typical air temperature (°C)
 //   wind       = how windy the circuit usually is
 //   night      = night race (no sun on the track)
-const CIRCUIT_CHARACTER = {
-  2:   { short: "Silverstone",  power: 0.60, downforce: 0.70, tyres: 0.80, overtaking: 0.60, street: 0.0, rain: 0.35, air: 20, wind: 0.6 },
-  4:   { short: "Hungaroring",  power: 0.30, downforce: 0.90, tyres: 0.60, overtaking: 0.30, street: 0.0, rain: 0.20, air: 30, wind: 0.3 },
-  6:   { short: "Imola",        power: 0.50, downforce: 0.60, tyres: 0.50, overtaking: 0.30, street: 0.0, rain: 0.35, air: 22, wind: 0.3 },
-  7:   { short: "Spa",          power: 0.90, downforce: 0.50, tyres: 0.60, overtaking: 0.80, street: 0.0, rain: 0.50, air: 19, wind: 0.4 },
-  9:   { short: "Austin",       power: 0.60, downforce: 0.70, tyres: 0.70, overtaking: 0.60, street: 0.0, rain: 0.10, air: 27, wind: 0.4 },
-  10:  { short: "Melbourne",    power: 0.60, downforce: 0.60, tyres: 0.50, overtaking: 0.50, street: 0.6, rain: 0.20, air: 22, wind: 0.4 },
-  // OpenF1 lists the 2026 race in Kuala Lumpur under the country "Bahrain" (Bahrain Grand Prix moved to Sepang)
-  12:  { short: "Kuala Lumpur", country: "Malaysia", power: 0.60, downforce: 0.70, tyres: 0.80, overtaking: 0.70, street: 0.0, rain: 0.60, air: 31, wind: 0.3 },
-  14:  { short: "Interlagos",   power: 0.70, downforce: 0.60, tyres: 0.60, overtaking: 0.70, street: 0.0, rain: 0.45, air: 23, wind: 0.3 },
-  15:  { short: "Barcelona",    power: 0.50, downforce: 0.80, tyres: 0.80, overtaking: 0.40, street: 0.0, rain: 0.10, air: 26, wind: 0.5 },
-  19:  { short: "Spielberg",    power: 0.80, downforce: 0.50, tyres: 0.50, overtaking: 0.70, street: 0.0, rain: 0.35, air: 24, wind: 0.3 },
-  22:  { short: "Monaco",       power: 0.10, downforce: 1.00, tyres: 0.30, overtaking: 0.05, street: 1.0, rain: 0.15, air: 22, wind: 0.2 },
-  23:  { short: "Montréal",     power: 0.80, downforce: 0.40, tyres: 0.40, overtaking: 0.70, street: 0.6, rain: 0.35, air: 22, wind: 0.3 },
-  39:  { short: "Monza",        power: 1.00, downforce: 0.20, tyres: 0.40, overtaking: 0.70, street: 0.0, rain: 0.15, air: 27, wind: 0.2 },
-  46:  { short: "Suzuka",       power: 0.60, downforce: 0.90, tyres: 0.80, overtaking: 0.40, street: 0.0, rain: 0.35, air: 20, wind: 0.4 },
-  49:  { short: "Shanghai",     power: 0.60, downforce: 0.70, tyres: 0.70, overtaking: 0.70, street: 0.0, rain: 0.25, air: 20, wind: 0.4 },
-  55:  { short: "Zandvoort",    power: 0.30, downforce: 0.90, tyres: 0.60, overtaking: 0.20, street: 0.0, rain: 0.35, air: 19, wind: 0.8 },
-  61:  { short: "Singapore",    power: 0.30, downforce: 1.00, tyres: 0.50, overtaking: 0.30, street: 1.0, rain: 0.35, air: 30, wind: 0.1, night: true },
-  63:  { short: "Sakhir",       power: 0.70, downforce: 0.60, tyres: 0.90, overtaking: 0.80, street: 0.0, rain: 0.02, air: 28, wind: 0.6, night: true },
-  65:  { short: "Mexico City",  power: 0.70, downforce: 0.60, tyres: 0.40, overtaking: 0.60, street: 0.0, rain: 0.10, air: 20, wind: 0.2 },
-  70:  { short: "Yas Marina",   power: 0.70, downforce: 0.60, tyres: 0.40, overtaking: 0.50, street: 0.0, rain: 0.01, air: 26, wind: 0.2, night: true },
-  144: { short: "Baku",         power: 0.95, downforce: 0.40, tyres: 0.40, overtaking: 0.80, street: 1.0, rain: 0.10, air: 24, wind: 0.8 },
-  149: { short: "Jeddah",       power: 0.90, downforce: 0.50, tyres: 0.40, overtaking: 0.70, street: 0.8, rain: 0.01, air: 28, wind: 0.4, night: true },
-  150: { short: "Lusail",       power: 0.60, downforce: 0.80, tyres: 0.90, overtaking: 0.40, street: 0.0, rain: 0.01, air: 27, wind: 0.4, night: true },
-  151: { short: "Miami",        power: 0.70, downforce: 0.60, tyres: 0.60, overtaking: 0.50, street: 0.6, rain: 0.30, air: 29, wind: 0.3 },
-  152: { short: "Las Vegas",    power: 0.95, downforce: 0.30, tyres: 0.30, overtaking: 0.80, street: 1.0, rain: 0.02, air: 13, wind: 0.5, night: true },
-  153: { short: "Madrid",       power: 0.60, downforce: 0.70, tyres: 0.60, overtaking: 0.50, street: 0.7, rain: 0.15, air: 26, wind: 0.3 }
-};
-
-const SEASON_YEARS = [2023, 2024, 2025, 2026];
+// SEASON_YEARS (the years with a calendar) also comes from the packs.
 const MAX_ROUNDS = 24;
 const MAX_TEAMS = 12; // the pit lane has 12 garages
 
@@ -113,21 +83,33 @@ function shortenedPointsTable(rule, base, distance, greenLaps) {
 
 // ---------- 3. Catalogue helpers ----------
 function catalogueCircuit(key) {
-  return SEASON_CATALOGUE.circuits.find(c => c.key === Number(key));
+  return catalogueIndex.circuits.get(String(key));
 }
 
 function catalogueDriver(id) {
-  return SEASON_CATALOGUE.drivers.find(d => d.id === id);
+  return catalogueIndex.drivers.get(id);
+}
+
+// The three-letter code on the timing screen. The id can be longer when two
+// drivers of different eras share a code (Vergne "VER2012" next to Verstappen "VER").
+function driverCode(id) {
+  const c = catalogueDriver(id);
+  if (c && c.code) return c.code;
+  return String(id).replace(/\d{4}[a-z]?$/, "");
 }
 
 function catalogueTeam(id) {
-  return SEASON_CATALOGUE.teams.find(t => t.id === id);
+  return catalogueIndex.teams.get(id);
 }
 
 // Display data of a circuit: name, country, Grand Prix name, usual date
 function circuitInfo(key) {
   const c = catalogueCircuit(key);
-  const ch = CIRCUIT_CHARACTER[key] || {};
+  if (!c) {
+    // a circuit of a data pack that is not loaded (any more)
+    return { key, name: String(key), country: "", gp: "Unknown circuit " + key, years: [], laps: 50, date: "07-01", sprintYears: [], character: {}, missing: true };
+  }
+  const ch = CIRCUIT_CHARACTER[c.key] || {};
   const latest = c.meetings[0];
   return {
     key: c.key,
@@ -142,12 +124,21 @@ function circuitInfo(key) {
   };
 }
 
-// The real calendar of a year (circuit keys in date order, with sprints)
+// Display data of a round: like circuitInfo, with the round's own Grand Prix name
+// (a circuit can host two events in a year, e.g. British and 70th Anniversary GP 2020)
+function roundInfo(round) {
+  const info = circuitInfo(round.circuit);
+  return round.gp ? Object.assign({}, info, { gp: round.gp }) : info;
+}
+
+// The real calendar of a year (circuit keys in date order, with sprints) – every event,
+// also two at the same circuit
 function realCalendar(year) {
   const rounds = [];
   for (const c of SEASON_CATALOGUE.circuits) {
-    const m = c.meetings.find(x => x.year === year);
-    if (m) rounds.push({ circuit: c.key, sprint: !!m.sprint, date: m.date });
+    for (const m of c.meetings) {
+      if (m.year === year) rounds.push({ circuit: c.key, sprint: !!m.sprint, date: m.date, gp: m.gp || null });
+    }
   }
   return rounds.sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -159,7 +150,7 @@ function teamInYear(teamId, year) {
   const years = Object.keys(t.years).map(Number).sort();
   const y = t.years[year] ? year : years.reduce((best, v) => Math.abs(v - year) < Math.abs(best - year) ? v : best, years[0]);
   const data = t.years[y];
-  return { id: t.id, year: y, name: data.name, colour: data.colour, drivers: data.drivers.slice(0, 2), avgFinish: data.avgFinish };
+  return { id: t.id, year: y, name: data.name, colour: data.colour, drivers: data.drivers.slice(0, 2), avgFinish: data.avgFinish, engine: data.engine || null };
 }
 
 // The driver's race number in (or nearest to) a year
@@ -171,9 +162,9 @@ function driverNumber(id, year) {
 }
 
 
-// ---------- 4. Regenerate the catalogue (run in the browser console) ----------
+// ---------- 4. Regenerate the core data pack (run in the browser console) ----------
 // const cat = await buildCatalogueFromOpenF1(); copy(JSON.stringify(cat));
-// then replace the object in season-catalogue.js.
+// then replace circuits / teams / drivers in data/core-2023.js (keep "layout" and "character").
 async function buildCatalogueFromOpenF1() {
   const sessions = await getData("sessions", "date_start>=2023-01-01");
   const driversAll = await getData("drivers", "meeting_key>=1140");

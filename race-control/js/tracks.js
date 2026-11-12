@@ -161,7 +161,6 @@ function inRange(s, a, b, L) {
 
 
 // ---------- 3. Speed profile (how fast an ideal car can go at every point) ----------
-const TOP_SPEED = 93; // m/s = 335 km/h
 
 // Simple physics: an F1 car can take a corner faster at higher speed
 // because of downforce. Then we add the limits of accelerating and braking.
@@ -502,9 +501,4 @@ function locationName(track, s) {
   const c = cornerAt(track, s);
   if (inRange(s, c.entry - 30, c.exit + 30, track.length)) return c.name;
   return mod(s - c.apex, track.length) < track.length / 2 ? "after " + c.name : "before " + c.name;
-}
-
-// Is s inside the pit lane area (between pit entry and pit exit)?
-function inPitArea(track, s) {
-  return inRange(s, track.pit.entry, track.pit.exit, track.length);
 }

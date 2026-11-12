@@ -36,6 +36,7 @@ function aiTick(ai) {
   const r = race;
   if (r.time - ai.lastTick < 0.5) return;
   ai.lastTick = r.time;
+  r.autoRecovery = true; // the AI Race Director sends the recovery crews at once
   aiStewards(ai);
   if (r.session === "QUALI") aiQualifying(ai);
   else aiRace(ai);
@@ -113,7 +114,7 @@ function aiSectorFlags(ai) {
     const i = ob.sector - 1;
     busy.add(i);
     if (r.status === "RED") continue;
-    if (ob.onTrack || ob.type === "BARRIER") {
+    if (ob.onTrack || ob.type === "BARRIER" || ob.type === "MEDICAL") {
       if (r.sectorFlags[i] !== "DOUBLE") setSectorFlag(i, "DOUBLE");
     } else if (r.sectorFlags[i] === "GREEN") {
       setSectorFlag(i, "YELLOW");
@@ -136,6 +137,20 @@ function aiSectorFlags(ai) {
   }
   if (r.slippery.some(Boolean) && !r.obstacles.some(o => !o.cleared && o.type === "OIL")) {
     r.slippery.forEach((on, i) => { if (on) setSlippery(i, false); });
+  }
+  // the rain signal where it rains (the whole track when it rains nearly everywhere)
+  const w = r.weather;
+  const rainIn = i => (w.rainS ? w.rainS[i] : w.rain);
+  // (with the option "marshals show the rain signal" the marshal posts do it themselves)
+  if (!r.autoMarshalRain) {
+    let wetSectors = 0;
+    for (let i = 0; i < r.sectorFlags.length; i++) if (rainIn(i) > 0.12) wetSectors++;
+    if (wetSectors >= r.sectorFlags.length * 0.8 && !(r.rainFlags && r.rainFlags.every(Boolean))) setRainAll(true); // one message for the whole track
+    for (let i = 0; i < r.sectorFlags.length; i++) {
+      const rain = rainIn(i);
+      if (rain > 0.12 && !rainShown(i)) setRainFlag(i, true);
+      else if (rain < 0.03 && rainShown(i)) setRainFlag(i, false);
+    }
   }
 }
 
@@ -164,6 +179,12 @@ function aiRace(ai) {
   }
   if (r.phase !== "RACE" || r.chequered) return;
 
+  // the pit exit is closed for the start: open it once the field has passed
+  if (!r.pitExitOpen && r.status !== "RED" && ai.exitOpenedFor !== r.lastStart && r.time - r.lastStart > 12 && !carApproachingPitExit()) {
+    ai.exitOpenedFor = r.lastStart;
+    setPitExit(true);
+  }
+
   aiSectorFlags(ai);
 
   // ----- conditions and overtaking aids -----
@@ -177,7 +198,7 @@ function aiRace(ai) {
     if (!r.straightEnabled && wet < 0.15) setStraightMode(true);
   }
   for (const car of r.cars) {
-    if (car.tlStrikes >= 3 && !ai.bwShown[car.id] && isRunning(car)) {
+    if (car.tlStrikes >= (r.tlBwAt || 3) && !ai.bwShown[car.id] && isRunning(car)) {
       ai.bwShown[car.id] = true;
       showCarFlag(car, "BW");
     }
@@ -187,9 +208,10 @@ function aiRace(ai) {
   const open = r.obstacles.filter(o => !o.cleared && aiSeen(ai, "ob" + o.id) > 3); // a few seconds to see what happened
   const onTrack = open.filter(o => o.onTrack);
   const barrier = open.filter(o => o.type === "BARRIER");
+  const medical = open.filter(o => o.type === "MEDICAL"); // the medical car goes out under the Safety Car
   const needRed = barrier.some(o => o.required > 330) || wet > 0.97 || lightning;
   // a crashed car on the track needs the recovery vehicle: Safety Car
-  const needSC = barrier.length > 0 || onTrack.length >= 2 || onTrack.some(o => o.type === "OIL" || (o.type === "CAR" && o.crash)) || wet > 0.9;
+  const needSC = barrier.length > 0 || medical.length > 0 || onTrack.length >= 2 || onTrack.some(o => o.type === "OIL" || (o.type === "CAR" && o.crash)) || wet > 0.9;
   // a stopped car on the track needs a VSC; debris is first cleared under double
   // yellow flags – a VSC only for big debris or when it takes too long
   const needVSC = onTrack.some(o => o.type === "CAR" || o.type === "OIL" || o.required > 75 || aiSeen(ai, "ob" + o.id) > 90) ||
@@ -213,7 +235,7 @@ function aiRace(ai) {
       redFlag();
       return;
     }
-    const clear = onTrack.length === 0 && barrier.length === 0 && !open.some(o => o.type === "CAR" && o.crash) && wet < 0.85;
+    const clear = onTrack.length === 0 && barrier.length === 0 && medical.length === 0 && !open.some(o => o.type === "CAR" && o.crash) && wet < 0.85;
     if (!clear) {
       ai.scClearSince = null;
       ai.lappedCalledAt = null;
@@ -224,7 +246,11 @@ function aiRace(ai) {
       lappedCarsMayOvertake();
       ai.lappedCalledAt = r.time;
     }
-    if (r.sc && r.time - ai.scClearSince > 50 && (ai.lappedCalledAt === null || r.time - ai.lappedCalledAt > 35)) safetyCarInThisLap();
+    if (r.sc && r.time - ai.scClearSince > 50 && (ai.lappedCalledAt === null || r.time - ai.lappedCalledAt > 35)) {
+      // after a start behind the Safety Car the race gets its standing start
+      if (r.startedBehindSc && !r.standingStartDone) safetyCarInStandingStart();
+      else safetyCarInThisLap();
+    }
     return;
   }
   if (st === "RED") {
@@ -263,9 +289,10 @@ function aiQualifying(ai) {
   if (r.weather.rain > 0.1 && !r.wetDeclared) declareWetRace();
 
   const open = r.obstacles.filter(o => !o.cleared && aiSeen(ai, "ob" + o.id) > 3);
-  const blocking = open.filter(o => o.onTrack || o.type === "BARRIER");
+  // a crashed car (also in the run-off: the crane must work there) stops the session
+  const blocking = open.filter(o => o.onTrack || o.type === "BARRIER" || o.type === "MEDICAL" || (o.type === "CAR" && o.crash));
   // a stopped car on the track or a damaged barrier = red flag in qualifying
-  if (r.status !== "RED" && (blocking.some(o => o.type === "CAR" || o.type === "BARRIER" || o.type === "OIL") || wet > 0.95 || lightning)) {
+  if (r.status !== "RED" && (blocking.some(o => o.type === "CAR" || o.type === "BARRIER" || o.type === "OIL" || o.type === "MEDICAL") || wet > 0.95 || lightning)) {
     redFlag();
     return;
   }

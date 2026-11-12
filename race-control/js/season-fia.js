@@ -7,6 +7,7 @@
 //  3. Driver nominations: superlicence and entry list
 //  4. The cost cap audit after the season
 //  5. The season review and the next season
+//  6. Exclusion of a driver or a team from the championship
 // =====================================================================
 
 // ---------- 1. Desk items ----------
@@ -33,6 +34,9 @@ const PROTEST_SUBJECTS = [
   { key: "PARC", name: "work on the car under parc fermé", test: "review of the parc fermé logs", unit: "", limit: 0 }
 ];
 
+// only when the event notes announced tyre pressure checks
+const TYRE_PRESSURE_CHECK = { key: "PRESSURE", text: "the tyre pressures were below the minimum prescribed by the tyre supplier",
+  measure: () => pick(["front-left", "front-right", "rear-left", "rear-right"]) + " tyre " + rand(0.2, 0.9).toFixed(1) + " psi below the minimum" };
 const TECH_CHECKS = [
   { key: "PLANK", text: "the skid block (plank) is worn below the minimum thickness of 9 mm", measure: () => "8." + Math.floor(rand(1, 9)) + " mm measured at the rear" },
   { key: "WEIGHT", text: "the car is below the minimum weight after the race", measure: () => "under the limit by " + rand(0.2, 1.4).toFixed(1) + " kg" },
@@ -42,8 +46,8 @@ const TECH_CHECKS = [
 // After every Grand Prix: maybe a protest and a scrutineering report
 function fiaDeskAfterRace(s, round, result) {
   if (!result || !result.rows) return;
-  const rnd = makeRandom(hashText(s.id + "/desk/" + round.round) % 1000000 + 21);
-  const info = circuitInfo(round.circuit);
+  const rnd = makeRandom(hashText(s.id + "/desk/" + roundSeed(round)) % 1000000 + 21);
+  const info = roundInfo(round);
   const classified = result.rows.filter(r => r.pos);
 
   // a team protests the legality of a car that finished ahead of it (~12 % of the races)
@@ -72,21 +76,31 @@ function fiaDeskAfterRace(s, round, result) {
         options: [{ key: "DISMISS", label: "Dismiss the protest" }, { key: "DSQ", label: "Uphold – disqualify both " + tTeam.name + " cars", danger: true }],
         data: { roundNumber: round.round, team: target.team, drivers: classified.filter(r => r.team === target.team).map(r => r.id), guilty, subject: subject.key }
       });
+      // the protest and the technical delegate's report are documents of the weekend
+      publishNotice(s, round.round, { session: "RACE", title: "Protest – " + pTeam.name + " against " + tTeam.name, from: pTeam.name, to: "The Stewards", sign: "Lodged with the Stewards",
+        body: pTeam.name + " protest " + subject.name + " of the " + tTeam.name + " cars.",
+        lines: [["Cars concerned", classified.filter(r => r.team === target.team).map(r => seasonDriverName(r.id)).join(", ")], ["Report of the Technical Delegate", finding]] });
     }
   }
 
-  // the technical delegate finds an irregularity at a car in the top 10 (~6 % of the races)
-  if (rnd() < 0.06 && classified.length > 3) {
+  // the technical delegate finds an irregularity at a car in the top 10 (~6 % of the races;
+  // more when the event notes announced tyre pressure checks)
+  const pressureChecks = !!round.tyreChecks;
+  if (rnd() < (pressureChecks ? 0.14 : 0.06) && classified.length > 3) {
     const row = classified[Math.floor(rnd() * Math.min(10, classified.length))];
-    const check = TECH_CHECKS[Math.floor(rnd() * TECH_CHECKS.length)];
+    const check = pressureChecks && rnd() < 0.6 ? TYRE_PRESSURE_CHECK : TECH_CHECKS[Math.floor(rnd() * TECH_CHECKS.length)];
+    const measured = check.measure();
     addDeskItem(s, {
       round: round.round, type: "TECHNICAL", status: "PENDING",
       title: "Technical delegate: " + seasonDriverName(row.id),
       text: "After the " + info.gp + " the technical delegate reports that on the car of " + seasonDriverName(row.id) + " (P" + row.pos + ") " +
-        check.text + ": " + check.measure() + ". The rule is absolute – there is no tolerance.",
+        check.text + ": " + measured + ". The rule is absolute – there is no tolerance.",
       options: [{ key: "DSQ", label: "Disqualify " + seasonDriverName(row.id), danger: true }, { key: "NFA", label: "No further action" }],
       data: { roundNumber: round.round, drivers: [row.id], guilty: true }
     });
+    publishNotice(s, round.round, { session: "RACE", title: "Technical Delegate's report – car of " + seasonDriverName(row.id), from: "The Technical Delegate", to: "The Stewards",
+      sign: "The Technical Delegate", body: "After the race the car of " + seasonDriverName(row.id) + " (P" + row.pos + ") was checked. The matter is referred to the Stewards.",
+      lines: [["Check", check.text], ["Result", measured]] });
   }
 }
 
@@ -106,6 +120,14 @@ function disqualifyFromRace(s, roundNumber, driverIds) {
   const table = res.table || POINTS_SYSTEMS[s.rules.points].race;
   const order = res.rows.filter(r => r.pos).sort((a, b) => a.pos - b.pos);
   order.forEach((row, i) => { row.pos = i + 1; });
+  // the fastest lap of a disqualified driver does not count: the next fastest driver gets it
+  if (res.fastestLap && driverIds.includes(res.fastestLap.id)) {
+    let fastest = null;
+    for (const row of res.rows) if (row.status !== "DSQ" && row.best && (!fastest || row.best < fastest.time)) fastest = { id: row.id, time: row.best };
+    res.fastestLap = fastest;
+    const pointFor = s.rules.fastestLapPoint && table.length >= 10;
+    for (const row of res.rows) row.fl = !!(pointFor && fastest && row.id === fastest.id && row.pos && row.pos <= 10);
+  }
   for (const row of res.rows) row.points = row.pos && row.pos <= table.length ? table[row.pos - 1] + (row.fl ? 1 : 0) : 0;
   res.rows.sort((a, b) => (a.pos || 99) - (b.pos || 99));
 }
@@ -154,6 +176,10 @@ function decideDeskItem(s, item, key, automatic) {
     } else {
       text = "FIA: " + item.title + " – no action.";
     }
+    publishNotice(s, d.roundNumber, { session: "RACE", title: "Decision – " + item.title, from: "The Stewards", sign: "The Stewards",
+      to: "The Team Managers", body: item.text,
+      lines: [["Decision", key === "DSQ" ? d.drivers.map(id => seasonDriverName(id)).join(" and ") + " disqualified from the results of the race" : "No further action"],
+              ["Reason", key === "DSQ" ? "The car(s) did not comply with the Technical Regulations at all times during the competition." : "The Stewards found no breach of the regulations."]] });
   } else if (item.type === "NOMINATION") {
     const team = seasonTeam(d.team);
     if (key === "APPROVE" && team && team.drivers.includes(d.out)) {
@@ -165,6 +191,23 @@ function decideDeskItem(s, item, key, automatic) {
   } else if (item.type === "AUDIT") {
     applyAuditDecision(s, item, key);
     text = "FIA: " + item.title + " – " + item.options.find(o => o.key === key).label + ".";
+    publishNotice(s, "S", { title: "Cost cap – " + item.title, from: "The Cost Cap Administration", sign: "The FIA", body: item.text,
+      lines: [["Decision", item.options.find(o => o.key === key).label]] });
+  } else if (item.type === "REVIEW") {
+    // right of review: overturning is right when the penalty was not deserved (stewards.js)
+    item.correct = (key === "OVERTURN") === !!d.shouldOverturn;
+    decideReview(s, item, key); // amended document + recalculated result (stewards.js)
+    if (key === "OVERTURN") {
+      text = "FIA: right of review granted – the penalty of " + seasonDriverName(d.driver) + " (round " + d.roundNumber + ") is withdrawn, the result is recalculated.";
+    } else {
+      text = "FIA: right of review – the decision about " + seasonDriverName(d.driver) + " (round " + d.roundNumber + ") stands.";
+    }
+  } else if (item.type === "ROOKIE") {
+    // a fine is right unless the team could not do it (cancelled or wet FP1 sessions)
+    item.correct = (key === "FINE") === !d.excused;
+    text = "FIA: " + item.title + " – " + (key === "FINE" ? "the team is fined € 100,000." : "no sanction (circumstances beyond the team's control).");
+    publishNotice(s, "S", { title: item.title, from: "The FIA", sign: "The FIA", body: item.text,
+      lines: [["Decision", key === "FINE" ? "Fine of € 100,000 for the team" : "No sanction – circumstances beyond the team's control"]] });
   }
   if (text) s.log.push({ date: new Date().toISOString(), round: item.round, text });
   saveSeason(s);
@@ -198,6 +241,7 @@ function seasonEndAudit(s) {
     addDeskItem(s, { round: null, type: "AUDIT_OK", status: "INFO", title: "Cost cap: all teams compliant",
       text: "The cost cap administration found no breach – every team stayed below " + cap.toFixed(1) + " M USD." });
   }
+  rookieRuleAudit(s); // FP1 sessions with a rookie (season-practice.js)
 }
 
 function applyAuditDecision(s, item, key) {
@@ -219,13 +263,14 @@ function seasonReviewData(s) {
   const st = computeStandings(s);
   const races = s.calendar.filter(r => r.sessions.RACE && r.sessions.RACE.status === "DONE");
   const all = [];
-  for (const r of s.calendar) for (const t in r.sessions) if (r.sessions[t] && r.sessions[t].status === "DONE") all.push({ round: r, type: t, res: r.sessions[t] });
+  for (const r of s.calendar) for (const t in r.sessions) if (r.sessions[t] && r.sessions[t].status === "DONE" && !isPractice(t)) all.push({ round: r, type: t, res: r.sessions[t] });
   const live = all.filter(x => !x.res.auto && x.res.rdScore !== null && x.res.rdScore !== undefined);
   const desk = (s.inbox || []).filter(x => x.status === "DONE" && x.correct !== undefined && !x.automatic);
   const count = re => s.log.filter(l => re.test(l.text)).length;
   return {
-    champion: st.drivers[0] || null,
-    constructor: st.teams[0] || null,
+    champion: st.drivers.find(d => !d.excluded) || null,
+    constructor: st.teams.find(t => !t.excluded) || null,
+    exclusions: activeExclusions(s).length,
     standings: st,
     races: races.length,
     cancelled: s.calendar.filter(r => r.status === "CANCELLED").length,
@@ -247,19 +292,44 @@ function seasonReviewData(s) {
   };
 }
 
+// Every team needs two different drivers: remove doubles, fill empty seats
+// with the best free drivers of the catalogue
+function fillEmptySeats(draft, baseYear) {
+  const seated = new Set();
+  for (const t of draft.teams) {
+    t.drivers = t.drivers.filter(id => {
+      if (!id || seated.has(id) || !catalogueDriver(id)) return false;
+      seated.add(id);
+      return true;
+    });
+  }
+  const free = SEASON_CATALOGUE.drivers
+    .filter(d => !seated.has(d.id))
+    .map(d => ({ id: d.id, skill: driverRatings(d.id, baseYear).skill }))
+    .sort((a, b) => b.skill - a.skill);
+  for (const t of draft.teams) {
+    while (t.drivers.length < 2 && free.length) t.drivers.push(free.shift().id);
+  }
+}
+
 // Start the next season with the same teams, drivers and rulebook; the cars carry over
-function createNextSeason(prev) {
+function createNextSeason(prev, options) {
+  options = options || {};
   const draft = {
     name: "Championship " + (prev.year + 1),
     year: prev.year + 1,
     baseYear: prev.baseYear,
     generation: prev.generation,
     rules: JSON.parse(JSON.stringify(prev.rules)),
-    calendar: prev.calendar.map(r => ({ circuit: r.circuit, sprint: r.sprint })),
-    teams: prev.teams.map(t => ({ id: t.id, name: t.name, colour: t.colour, drivers: t.drivers.filter(id => !(prev.drivers[id] || {}).standInFor) })),
+    calendar: prev.calendar.map(r => ({ circuit: r.circuit, sprint: r.sprint, gp: r.gp || null })),
+    // a stand-in hands the seat back to the driver he stood in for
+    teams: prev.teams.map(t => ({ id: t.id, name: t.name, colour: t.colour, drivers: t.drivers.map(id => (prev.drivers[id] || {}).standInFor || id) })),
     zones: JSON.parse(JSON.stringify(prev.zones || {}))
   };
-  draft.calendar.sort((a, b) => circuitInfo(a.circuit).date.localeCompare(circuitInfo(b.circuit).date));
+  fillEmptySeats(draft, prev.baseYear);
+  draft.calendar.sort((a, b) => roundInfo(a).date.localeCompare(roundInfo(b).date));
+  const problems = checkDraft(draft);
+  if (problems.length) throw new Error(problems[0]);
   const s = createSeason(draft);
   // the drivers keep their numbers and ratings
   for (const id in s.drivers) {
@@ -292,10 +362,100 @@ function createNextSeason(prev) {
     const best = Math.max(...s.teams.map(t => s.cars[t.id][k]));
     if (best > 100) for (const t of s.teams) s.cars[t.id][k] = round1(s.cars[t.id][k] - (best - 100));
   }
+  // bans of the FIA that continue (excluded and banned from the start of the new season)
+  if (options.keepBans) {
+    s.exclusions = activeExclusions(prev).filter(x => x.banned).map((x, i) => Object.assign({}, x, {
+      id: i + 1, fromRound: 1, date: new Date().toISOString(), reason: x.reason + " (ban continued from " + prev.name + ")"
+    }));
+    s.exclusionSeq = s.exclusions.length;
+    for (const x of s.exclusions) s.log.push({ date: x.date, text: "FIA: the ban of " + exclusionName(s, x) + " continues in this season." });
+  }
   s.previousSeason = prev.id;
   s.log.push({ date: new Date().toISOString(), text: "Season created from " + prev.name + " – teams, drivers and cars carried over." });
   saveSeason(s);
   prev.nextSeason = s.id;
   saveSeason(prev);
   return s;
+}
+
+
+// ---------- 6. Exclusion from the championship ----------
+// The FIA can exclude a driver or a team from the championship, like Michael
+// Schumacher in 1997 (drivers' championship) or McLaren in 2007 (constructors'):
+// the race results stay as they are – nobody moves up in a race – but the
+// driver / team is no longer classified in the championship.
+// { id, kind: "DRIVER" | "TEAM", target, alsoOther, banned, fromRound, reason, date, revoked, revokedDate }
+//   alsoOther: DRIVER -> his points don't count for his team either
+//              TEAM   -> its drivers are excluded from the drivers' championship too
+//   banned:    also excluded from the remaining events (from round fromRound on):
+//              a driver is replaced by a stand-in, a team does not start any more
+function activeExclusions(s) {
+  return (s.exclusions || []).filter(x => !x.revoked);
+}
+
+// Who is out of which standings
+function exclusionSets(s) {
+  const sets = { drivers: new Set(), teams: new Set(), teamsWithDrivers: new Set(), noTeamPoints: new Set() };
+  for (const x of activeExclusions(s)) {
+    if (x.kind === "DRIVER") {
+      sets.drivers.add(x.target);
+      if (x.alsoOther) sets.noTeamPoints.add(x.target);
+    } else {
+      sets.teams.add(x.target);
+      if (x.alsoOther) {
+        sets.teamsWithDrivers.add(x.target);
+        const team = s.teams.find(t => t.id === x.target);
+        if (team) for (const id of team.drivers) sets.drivers.add(id);
+      }
+    }
+  }
+  return sets;
+}
+
+// Is a driver / team banned from the events of this round?
+function bannedFromEvents(s, kind, id, roundNumber) {
+  return activeExclusions(s).some(x => x.banned && x.kind === kind && x.target === id && roundNumber >= x.fromRound);
+}
+
+// The first round the decision can apply to: a weekend that has already started is finished as it is
+function nextAffectedRound(s) {
+  const next = nextSession(s);
+  if (!next) return s.calendar.length + 1;
+  return next.round.prepared ? next.round.round + 1 : next.round.round;
+}
+
+function exclusionName(s, x) {
+  return x.kind === "DRIVER" ? seasonDriverName(x.target) : (s.teams.find(t => t.id === x.target) || { name: x.target }).name;
+}
+
+function excludeFromChampionship(s, kind, target, options) {
+  s.exclusions = s.exclusions || [];
+  s.exclusionSeq = (s.exclusionSeq || 0) + 1;
+  const x = {
+    id: s.exclusionSeq, kind, target, alsoOther: !!options.alsoOther, banned: !!options.banned,
+    fromRound: nextAffectedRound(s), reason: String(options.reason || "").trim(), date: new Date().toISOString(), revoked: false
+  };
+  s.exclusions.push(x);
+  const name = exclusionName(s, x);
+  const what = kind === "DRIVER"
+    ? name + " is excluded from the drivers' championship" + (x.alsoOther ? " (his points don't count for the constructors either)" : "")
+    : name + " is excluded from the constructors' championship" + (x.alsoOther ? " – its drivers from the drivers' championship too" : "");
+  const ban = x.banned ? (x.fromRound <= s.calendar.length ? " Banned from all remaining events (from round " + x.fromRound + ")." : " Banned from the remaining events.") : " The race results stand.";
+  const text = "FIA: " + what + "." + ban + " Reason: " + x.reason;
+  s.log.push({ date: x.date, round: null, text });
+  addDeskItem(s, { round: null, type: "EXCLUSION", status: "INFO", title: "Excluded from the championship: " + name, text: what + "." + ban + " Reason: " + x.reason });
+  saveSeason(s);
+  return x;
+}
+
+// An appeal is upheld: everything counts again (a banned driver / team is back from the next weekend)
+function revokeExclusion(s, id) {
+  const x = (s.exclusions || []).find(e => e.id === id);
+  if (!x || x.revoked) return;
+  x.revoked = true;
+  x.revokedDate = new Date().toISOString();
+  const name = exclusionName(s, x);
+  s.log.push({ date: x.revokedDate, round: null, text: "FIA: the exclusion of " + name + " from the championship has been lifted." });
+  addDeskItem(s, { round: null, type: "EXCLUSION", status: "INFO", title: "Exclusion lifted: " + name, text: "The exclusion of " + name + " has been lifted (appeal upheld). " + (x.banned ? "Back in the races from the next weekend; " : "") + "the points count again." });
+  saveSeason(s);
 }

@@ -16,9 +16,8 @@
 //  Positions: metres from the centre of the circuit (x = east, y = north).
 // =====================================================================
 
-const WEEKEND_SECONDS = 3 * 86400;
 const DAY_NAMES = ["Friday", "Saturday", "Sunday"];
-const LIGHTNING_KM = 10;   // lightning closer than this: marshals must take cover
+// (LIGHTNING_KM: settings/weather.js)
 
 // ---------- 1. The weekend weather ----------
 function makeWeekendWeather(seedText, circuitKey) {
@@ -74,8 +73,9 @@ function makeWeekendWeather(seedText, circuitKey) {
 function sessionSchedule(round, night) {
   const late = night ? 4 : 0; // night races run in the evening
   return round.sprint
-    ? { SQ: 0 * 86400 + (16.5 + late) * 3600, SPRINT: 1 * 86400 + (12 + late) * 3600, Q: 1 * 86400 + (16 + late) * 3600, RACE: 2 * 86400 + (15 + late) * 3600 }
-    : { Q: 1 * 86400 + (16 + late) * 3600, RACE: 2 * 86400 + (15 + late) * 3600 };
+    ? { FP1: 0 * 86400 + (12.5 + late) * 3600, SQ: 0 * 86400 + (16.5 + late) * 3600, SPRINT: 1 * 86400 + (12 + late) * 3600, Q: 1 * 86400 + (16 + late) * 3600, RACE: 2 * 86400 + (15 + late) * 3600 }
+    : { FP1: 0 * 86400 + (13.5 + late) * 3600, FP2: 0 * 86400 + (17 + late) * 3600, FP3: 1 * 86400 + (12.5 + late) * 3600,
+        Q: 1 * 86400 + (16 + late) * 3600, RACE: 2 * 86400 + (15 + late) * 3600 };
 }
 
 function formatWeekendTime(t) {
@@ -278,6 +278,7 @@ function updateCellWeather(r) {
   const t = r.setup.weather.offset + r.time;
   const wasRaining = w.rainS.map(x => x > 0.08);
   stepSectorWetness(w, W, t, 1);
+  dryingLine(w, r);
   applyConditions(w, W, t);
 
   // the marshal posts report rain where it starts
@@ -307,17 +308,23 @@ function updateCellWeather(r) {
   }
 }
 
+// The drying line: once the rain stops, the cars clear the water from the racing line –
+// every car that passes a marshal sector dries it a little more (r.linePasses from engine.js).
+function dryingLine(w, r) {
+  const passes = r.linePasses;
+  if (!passes) return;
+  for (let i = 0; i < w.wetS.length; i++) {
+    const n = passes[i] || 0;
+    passes[i] = 0;
+    if (n && w.wetS[i] > w.rainS[i] && w.rainS[i] < 0.1) w.wetS[i] = Math.max(w.rainS[i], w.wetS[i] - 0.002 * n * (1 - w.rainS[i]));
+  }
+}
+
 // Wetness / rain where the car is
 function wetAt(s) {
   const w = race.weather;
   if (!w.wetS) return w.wet;
   return w.wetS[marshalSectorAt(race.track, s) - 1];
-}
-
-function rainAt(s) {
-  const w = race.weather;
-  if (!w.rainS) return w.rain;
-  return w.rainS[marshalSectorAt(race.track, s) - 1];
 }
 
 // The teams choose tyres from the whole lap, the wettest part counts more

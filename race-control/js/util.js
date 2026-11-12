@@ -145,8 +145,14 @@ async function waitForTurn() {
   recentRequests.push(Date.now());
 }
 
+// Returns the list of records. OpenF1 answers 404 when a query finds no
+// records, so 404 -> [] ("no data"). Everything else that goes wrong
+// (no network, server errors, still rate-limited after all attempts)
+// throws, so the caller can tell "empty" from "failed".
 async function getData(endpoint, params) {
   const url = API + endpoint + "?" + params;
+  let problem = "unknown error";
+  let networkErrors = 0;
 
   for (let attempt = 1; attempt <= 6; attempt++) {
     await waitForTurn();
@@ -154,15 +160,23 @@ async function getData(endpoint, params) {
     try {
       const response = await fetch(url);
       if (response.ok) return await response.json();
+      if (response.status === 404) return []; // no records for this query
       if (response.status === 429) { // too many requests -> wait and try again
+        problem = "too many requests (429)";
         await sleep(12000);
         continue;
       }
-      return []; // e.g. 404 = no data
+      problem = "server error " + response.status;
+      if (response.status >= 400 && response.status < 500) break; // bad request: trying again won't help
+      await sleep(2000);
     } catch (error) {
-      console.log("Network error:", error);
-      await sleep(1000);
+      problem = "network error – no connection to OpenF1";
+      console.warn("Network error:", error);
+      if (++networkErrors >= 3) break; // offline: give up quickly instead of waiting a minute
+      await sleep(1000 * attempt);
     }
   }
-  return [];
+  const failure = new Error("OpenF1 " + endpoint + ": " + problem);
+  failure.network = true; // the request failed (not "no data"): trying other sessions won't help
+  throw failure;
 }

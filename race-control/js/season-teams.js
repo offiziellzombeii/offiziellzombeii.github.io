@@ -90,6 +90,7 @@ function seasonEntries(s, roundNumber, circuitKey) {
       entries.push({
         number: d.number,
         code: d.code,
+        driverId: id,                 // the season id of the driver (the code is only for the screen)
         name: d.first + " " + d.last,
         team: t.name,
         teamId: t.id,

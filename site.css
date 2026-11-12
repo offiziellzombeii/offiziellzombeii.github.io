@@ -16,6 +16,22 @@
   --site-nav-height: 52px;
 }
 
+/* ---------- Scroll bars (every page): thin, in the colours of the site ---------- */
+* {
+  scrollbar-width: thin;                                   /* Firefox */
+  scrollbar-color: #343b4b transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #343b4b;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--site-muted); background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 /* ---------- Navigation bar (on every page) ---------- */
 .site-nav {
   position: relative;
@@ -53,6 +69,7 @@
 .site-links {
   display: flex;
   gap: 4px;
+  min-width: 0;          /* narrow phones: the links scroll, the bar does not overflow */
   overflow-x: auto;
 }
 
@@ -214,7 +231,7 @@
 
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 18px;
 }
 

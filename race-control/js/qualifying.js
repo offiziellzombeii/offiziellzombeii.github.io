@@ -13,8 +13,7 @@
 //  The driving itself is done by the normal engine (engine.js).
 // =====================================================================
 
-const QUALI_DURATIONS = [18 * 60, 15 * 60, 12 * 60];
-const SPRINT_QUALI_DURATIONS = [12 * 60, 10 * 60, 8 * 60];
+// (QUALI_DURATIONS, SPRINT_QUALI_DURATIONS: settings/sessions.js)
 
 // Called by createRace() when the session is a qualifying
 function setupQualifying(r) {
@@ -31,9 +30,14 @@ function setupQualifying(r) {
     keep: [Math.round(n * 0.75), Math.round(n * 0.5)], // cars that go through to Q2 and Q3
     lapSeconds: r.track.refLapTime / r.paceScale,
     results: {},
-    maxDelta: true       // the Race Director's maximum delta time for out laps and in laps
+    maxDelta: true,      // the Race Director's maximum delta time for out laps and in laps (also in practice)
+    // free practice (championship): "FP1" | "FP2" | "FP3" – one segment, nobody is knocked out,
+    // the teams do several runs (short runs, long runs on high fuel) instead of push laps
+    practice: r.setup.practice || null
   };
+  if (r.q.practice) r.q.keep = [];
   r.drsEnabled = true; // in qualifying DRS may be used in the zones without the 1-second rule
+  r.pitExitOpen = false; // red light until the Race Director starts the session (green light)
   r.cars.forEach((car, i) => {
     car.skipLine = false;
     car.fuel = 8;
@@ -43,7 +47,18 @@ function setupQualifying(r) {
 }
 
 function segName(n) {
+  if (race.setup.practice) return race.setup.practice;
   return (race.setup.sprint ? "SQ" : "Q") + (n || race.q.segment);
+}
+
+// "practice" or "qualifying" – for messages of the Race Director console
+function sessionKind() {
+  return race && race.setup.practice ? "practice" : "qualifying";
+}
+
+// the number of segments of the session
+function qualiSegments() {
+  return race.q && race.q.practice ? 1 : 3;
 }
 
 // cars that may still drive in this segment
@@ -101,6 +116,7 @@ function setMaxDelta(on) {
 function planRuns(car) {
   const q = race.q;
   const R = q.remaining;
+  if (q.practice) return planPracticeRuns(car);
   const outLap = q.lapSeconds * 1.25 + 25;          // pit lane + out lap
   const lastRun = outLap + rand(15, 75);            // the big rush at the end
   const runs = [];
@@ -112,11 +128,65 @@ function planRuns(car) {
   return runs;
 }
 
+// Free practice: several runs spread over the hour. Short runs (2–5 laps, low fuel,
+// soft or medium), and long runs on high fuel (race pace, 8–13 laps) – mostly in FP2.
+// "pushes" = timed laps of the run, "pace" = speed factor (fuel and engine mode).
+function planPracticeRuns(car) {
+  const q = race.q;
+  const lap = q.lapSeconds;
+  const fp = q.practice;
+  const runs = [];
+  // the engine modes are turned up during the weekend: FP1 ≈ 1.2 % off the pole time, FP3 ≈ 0.5 %
+  const base = { FP1: 0.985, FP2: 0.99, FP3: 0.993 }[fp] || 0.99;
+  let t = q.remaining - rand(60, 480);
+  let k = 0;
+  while (t > lap * 3 + 60 && k < 8) {
+    const long = (fp === "FP2" && (k === 2 || k === 3)) || (fp === "FP1" && k === 3 && chance(0.5));
+    const qualiSim = fp === "FP3" && t < lap * 6 + 600; // the end of FP3: a qualifying simulation
+    const pushes = long ? Math.round(rand(8, 13)) : qualiSim ? 2 : Math.round(rand(2, 5));
+    const pace = long ? rand(0.972, 0.978) : qualiSim ? rand(0.994, 0.998) : base * rand(0.995, 1);
+    const compound = long ? (chance(0.5) ? "MEDIUM" : "HARD") : qualiSim || chance(0.55) ? "SOFT" : "MEDIUM";
+    runs.push({ at: t, pushes, pace, compound, long });
+    t -= (pushes + 2.4) * lap + rand(150, 540);
+    k++;
+  }
+  return runs;
+}
+
+// Championship tyre allocation (season-practice.js): every run takes a set. In qualifying the
+// teams keep new softs for the last run of each segment; without a new set the car runs on
+// a used one (slower, USED_SOFT_FACTOR). car.newSofts === null: no allocation (other modes).
+function takeTyreSet(car, run, compound) {
+  const q = race.q;
+  car.q.usedSet = false;
+  if (car.newSofts === null || car.newSofts === undefined) return;
+  if (compound !== "SOFT") {
+    // practice long runs on a used set once only the race sets (1 medium, 1 hard) are left
+    if (["MEDIUM", "HARD"].includes(compound) && (car.spareSets || {})[compound] > 0) {
+      car.spareSets[compound]--;
+      car.setsUsed[compound] = (car.setsUsed[compound] || 0) + 1;
+    }
+    return;
+  }
+  const segmentsLeft = q.practice ? 0 : qualiSegments() - q.segment; // segments after this one
+  const takeNew = car.newSofts > 0 && (q.practice || run.last || car.newSofts > segmentsLeft);
+  if (takeNew) {
+    car.newSofts--;
+    car.setsUsed.SOFT = (car.setsUsed.SOFT || 0) + 1;
+  } else if (!q.practice) {
+    car.q.usedSet = true; // a used set from earlier
+  }
+}
+
 function launchRun(car, run) {
   const r = race;
   const L = r.track.length;
   const w = teamWetView();
-  const compound = w > 0.78 ? "WET" : w > 0.22 ? "INTERMEDIATE" : "SOFT";
+  const compound = w > 0.78 ? "WET" : w > 0.22 ? "INTERMEDIATE" : (run.compound || "SOFT");
+  car.q.runPace = run.pace || 1;
+  car.q.runLong = !!run.long;
+  takeTyreSet(car, run, compound);
+  car.q.runNo = (car.q.runNo || 0) + 1;
 
   car.mode = "RACE";
   car.pit.state = "OUT";
@@ -164,7 +234,7 @@ function updateQualifying() {
         if (q.remaining < q.lapSeconds * 1.25 + 20) continue; // too late to start a push lap
         // a car that is already safely through may save its tyres
         const pos = order.indexOf(car) + 1;
-        if (run.last && q.segment < 3 && bestLapInSegment(car, q.segment) && pos <= q.keep[q.segment - 1] - 6 && chance(0.6)) continue;
+        if (run.last && !q.practice && q.segment < 3 && bestLapInSegment(car, q.segment) && pos <= q.keep[q.segment - 1] - 6 && chance(0.6)) continue;
         launchRun(car, run);
       }
     }
@@ -186,7 +256,9 @@ function showQualiChequer() {
   const q = r.q;
   q.state = "CHEQUERED";
   q.chequerTime = r.time;
+  r.pitExitOpen = false; // nobody may go out any more
   publish("CHEQUERED FLAG", "Flag");
+  publish("PIT EXIT CLOSED", "Info");
   for (const car of activeQualiCars()) {
     car.q.runs = [];
     if (car.mode !== "RACE") continue;
@@ -204,7 +276,7 @@ function endQualiSegment() {
   order.forEach((car, i) => { car.q.prevPos = i; });
   q.results[q.segment] = order.map(car => car.id);
 
-  if (q.segment < 3) {
+  if (q.segment < qualiSegments()) {
     const keep = q.keep[q.segment - 1];
     const out = order.slice(keep);
     for (const car of out) car.q.eliminated = q.segment;
@@ -218,7 +290,7 @@ function endQualiSegment() {
     r.phase = "FINISHED";
     r.finished = true;
     publish("SESSION FINISHED", "Info");
-    addAlert("info", "Qualifying is over. Decide any open investigations, then open the session report.");
+    addAlert("info", (q.practice ? q.practice : "Qualifying") + " is over. Decide any open investigations, then open the session report.");
   }
   r.ver++;
 }
@@ -239,9 +311,12 @@ function bestLapInSegment(car, segment) {
 // The cars of one segment, fastest first
 function segmentOrder(segment) {
   const cars = race.cars.filter(c => !c.dsq && (!c.q.eliminated || c.q.eliminated >= segment));
+  // the best lap of every car once (not once per comparison)
+  const best = new Map();
+  for (const c of cars) best.set(c, bestLapInSegment(c, segment));
   return cars.sort((a, b) => {
-    const la = bestLapInSegment(a, segment);
-    const lb = bestLapInSegment(b, segment);
+    const la = best.get(a);
+    const lb = best.get(b);
     if (la && lb) return (la.time - lb.time) || (la.t - lb.t); // same time: who set it first
     if (la) return -1;
     if (lb) return 1;
@@ -254,8 +329,9 @@ function qualiOrder() {
   const r = race;
   const seg = Math.max(1, r.q.segment);
   const still = segmentOrder(seg).filter(c => !c.q.eliminated);
-  const outQ2 = segmentOrder(2).filter(c => c.q.eliminated === 2);
-  const outQ1 = segmentOrder(1).filter(c => c.q.eliminated === 1);
+  // the knocked-out cars only have to be sorted once somebody is knocked out
+  const outQ2 = r.cars.some(c => c.q.eliminated === 2) ? segmentOrder(2).filter(c => c.q.eliminated === 2) : [];
+  const outQ1 = r.cars.some(c => c.q.eliminated === 1) ? segmentOrder(1).filter(c => c.q.eliminated === 1) : [];
   const dsq = r.cars.filter(c => c.dsq);
   return still.concat(outQ2, outQ1, dsq);
 }
@@ -269,6 +345,7 @@ function qualiCrossLine(car) {
   // That is not the end of the out lap.
   if (phase === "OUT" && car.pit.state) return;
   const now = timingNow(); // exact moment the car crossed the line (to the thousandth)
+  r.rubber = Math.min(1, r.rubber + RUBBER_PER_LAP * (1 - r.rubber) * (1 - wetAt(car.s))); // rubber on the track (engine.js)
   car.laps++;
   const record = {
     lap: car.laps,
@@ -282,6 +359,7 @@ function qualiCrossLine(car) {
     type: phase,
     segment: q.segment,
     aborted: car.q.aborted || phase !== "PUSH",
+    run: car.q.runNo || 0,
     t: now
   };
   car.lapTimes.push(record);
@@ -302,11 +380,12 @@ function qualiCrossLine(car) {
     car.q.aborted = false;
   } else if (phase === "PUSH") {
     car.q.pushesLeft--;
-    const anotherLap = sessionOpen && car.q.pushesLeft > 0 && !car.q.aborted && car.tyre.wear < 0.25;
+    // (a long run in practice goes on while the tyres last; an aborted practice lap is just the next lap)
+    const anotherLap = sessionOpen && car.q.pushesLeft > 0 && (q.practice || !car.q.aborted) && car.tyre.wear < (q.practice ? 0.7 : 0.25);
     car.q.phase = anotherLap ? "PUSH" : "COOL";
     car.q.aborted = false;
   }
-  if (chance(0.0005 * r.level)) startFailure(car);
+  if (chance(FAILURE_CHANCE_QUALI * r.level)) startFailure(car);
 }
 
 // Does the car come back to the garage at the end of this lap?
@@ -315,6 +394,9 @@ function wantsGarage(car) {
   const broken = car.damage.puncture || car.flag === "BO" || car.dsq || (car.failure && car.failure.toPits);
   // a push lap is always finished first (even after the chequered flag)
   if (car.q.phase === "PUSH" && !car.q.aborted && !broken) return false;
+  // practice: a lap spoilt by a yellow flag is just one lap – the run goes on
+  // (this is decided before the line: more than one lap left means the run is not over)
+  if (r.q.practice && car.q.phase === "PUSH" && car.q.pushesLeft > 1 && r.q.state === "RUNNING" && !broken && !car.damage.wing) return false;
   // at the end of the out lap the push lap starts
   if (car.q.phase === "OUT" && r.q.state === "RUNNING" && !broken && !car.damage.wing) return false;
   return true;
@@ -325,7 +407,7 @@ function qualiSpeedFactor(car) {
   const q = race.q;
   if (car.q.phase === "OUT") return 0.86;
   if (car.q.phase === "COOL") return 0.74;
-  let f = 1 + q.evolution;
+  let f = (1 + q.evolution) * (q.practice ? car.q.runPace || 1 : 1) * (car.q.usedSet ? USED_SOFT_FACTOR : 1);
   if (car.q.aborted) f = 0.8;
   if (car.q.compromised) f *= 0.99;
   return f;
@@ -470,6 +552,7 @@ function resumeQualifying() {
   r.status = "GREEN";
   r.pitExitOpen = true;
   r.sectorFlags.fill("GREEN");
+  r.flagPanels = [];
   for (const car of activeQualiCars()) {
     if (car.mode === "GARAGE") car.q.runs = planRuns(car);
   }

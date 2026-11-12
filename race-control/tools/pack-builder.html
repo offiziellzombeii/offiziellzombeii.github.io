@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Data Pack Builder · Pit Wall</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../site.css">
+  <link rel="stylesheet" href="../rc.css">
+  <script src="../../perf.js"></script> <!-- ?perf=1: performance overlay -->
+  <style>
+    /* only what this page needs on top of rc.css (same colours, same font) */
+    .builder-steps { display: flex; flex-direction: column; gap: 18px; }
+    .builder-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+    .builder-fields .wide { grid-column: 1 / -1; } /* the whole row – also when only one column fits */
+    .builder-fields button { width: 100%; }
+    .builder-scroll { max-height: 340px; overflow: auto; }
+    .builder-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; align-items: start; }
+    .builder-circuits { display: flex; flex-direction: column; gap: 6px; }
+    .builder-circuits button {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 9px 11px; text-align: left;
+      border-left: 3px solid var(--border);
+    }
+    .builder-circuits button span { display: flex; flex-direction: column; gap: 2px; }
+    .builder-circuits button.active { background: var(--card-3); border-left-color: var(--accent); }
+    .builder-editor { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .builder-preview { width: 100%; height: 420px; display: block; background: #0f131b; border: 1px solid var(--border); border-radius: 10px; }
+    .builder-sliders { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+    .builder-sliders input[type=range] { padding: 0; border: 0; background: none; accent-color: var(--accent); }
+    .builder-sliders .value { color: var(--text); font-variant-numeric: tabular-nums; }
+    .builder-log { display: flex; flex-direction: column; gap: 3px; max-height: 170px; overflow: auto; font-size: 12px; color: var(--muted); }
+    .builder-log .ok { color: var(--green); }
+    .builder-log .bad { color: #ff8079; }
+    .builder-progress { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--accent); border-radius: 10px; background: rgba(225, 6, 0, 0.08); }
+    .builder-progress-body { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+    .builder-progress-body b { font-size: 14px; }
+    .builder-busy-line { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(225, 6, 0, 0.08); color: var(--text); font-weight: 600; font-size: 12px; }
+    .builder-spinner { flex-shrink: 0; width: 26px; height: 26px; border: 3px solid var(--card-3); border-top-color: var(--accent); border-radius: 50%; animation: builder-spin 0.8s linear infinite; }
+    .builder-spinner.small { width: 14px; height: 14px; border-width: 2px; }
+    @keyframes builder-spin { to { transform: rotate(360deg); } }
+    .builder-circuits button.loading { border-left-color: var(--accent); background: rgba(225, 6, 0, 0.08); opacity: 1; }
+    .builder a { color: #ff6a62; text-decoration: none; font-weight: 600; }
+    .builder a:hover { text-decoration: underline; }
+    .builder .ok-mark { color: var(--green); font-weight: 700; }
+    .builder .bad-mark { color: #ff8079; font-weight: 700; }
+    @media (max-width: 860px) { .builder-layout { grid-template-columns: minmax(0, 1fr); } .builder-preview { height: 320px; } }
+  </style>
+</head>
+<body class="rc">
+
+  <nav class="site-nav">
+    <a class="site-brand" href="../../index.html"><span class="site-stripe"></span>Pit Wall</a>
+    <div class="site-links">
+      <a href="../../index.html">Home</a>
+      <a href="../../replay.html">Session Replay</a>
+      <a href="../index.html" class="active">Race Control</a>
+    </div>
+  </nav>
+
+  <section class="setup builder">
+    <div class="setup-head">
+      <h1>Data Pack Builder</h1>
+      <p>Make a data pack for the championship mode from open data: the results of any season since 1950 from the
+        Jolpica F1 API and circuit layouts from the f1-circuits collection. Then import it in Race Control
+        (Championship → Data packs). <a href="../index.html">← Back to Race Control</a></p>
+    </div>
+
+    <div class="builder-steps">
+      <!-- Step 1 -->
+      <article class="setup-card">
+        <span class="setup-tag">Step 1 · Season</span>
+        <h2>Load a season</h2>
+        <p class="muted">Calendar, teams and drivers of one year with the same statistics as the built-in pack:
+          average finish and grid position, head-to-head against the team mate, retirements.</p>
+        <div class="builder-fields">
+          <label>Season <select id="year"><option value="">loading the list …</option></select></label>
+          <label>&nbsp;<button id="loadSeason" class="button-primary">Load season</button></label>
+        </div>
+        <p id="seasonStatus" class="muted small"></p>
+        <div id="seasonBusy" class="builder-busy-line" hidden><span class="builder-spinner small"></span><span id="seasonBusyText"></span></div>
+        <div id="seasonResult"></div>
+      </article>
+
+      <!-- Step 2 -->
+      <article class="setup-card">
+        <span class="setup-tag">Step 2 · Circuit layouts</span>
+        <h2>Check the new circuits</h2>
+        <p class="muted">Circuits that are not in a pack yet get their layout from the f1-circuits collection (MIT licence) –
+          or, if it is not there, from the race track mapped in OpenStreetMap around the circuit (the loop closest to the
+          expected length; start line next to the pit lane). Street circuits that are normal roads today are often not
+          mapped as a race track: then load a layout file (GeoJSON, GPX or KML – e.g. drawn on geojson.io).
+          Check every one: the white line is the start / finish line,
+          the arrow shows the direction of the race.
+          The speed profile comes from physics on the layout, calibrated to the real pole time of the season
+          (1.04 × pole, like the circuits with telemetry). If that time looks wrong (a wet qualifying), enter a dry reference lap.</p>
+        <div id="layoutProgress" class="builder-progress" hidden>
+          <span class="builder-spinner"></span>
+          <div class="builder-progress-body">
+            <b id="layoutProgressText">Loading …</b>
+            <div class="progress"><div id="layoutProgressBar"></div></div>
+            <span id="layoutProgressSub" class="muted small"></span>
+            <span class="muted small">This can take up to a minute for circuits in a city – the page is still working.</span>
+          </div>
+        </div>
+        <div class="builder-layout">
+          <div class="builder-circuits" id="circuitList"><p class="muted small">Load a season first.</p></div>
+          <div class="builder-editor" id="layoutEditor"></div>
+        </div>
+      </article>
+
+      <!-- Step 3 -->
+      <article class="setup-card">
+        <span class="setup-tag">Step 3 · Export</span>
+        <h2>Save the pack</h2>
+        <div class="builder-fields">
+          <label class="wide">Pack id <input type="text" id="packId" value=""></label>
+          <label class="wide">Name <input type="text" id="packName" value=""></label>
+        </div>
+        <div class="btn-row">
+          <button id="downloadJson" class="button-primary">Download pack (JSON, for the import)</button>
+          <button id="saveProject" hidden>Save into the project (built-in pack)</button>
+        </div>
+        <p id="exportStatus" class="muted small"></p>
+      </article>
+
+      <div class="setup-help">
+        <h3>Log</h3>
+        <div id="log" class="builder-log"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    Results from the <a href="https://github.com/jolpica/jolpica-f1" target="_blank" rel="noopener">Jolpica F1 API</a>,
+    circuit layouts from <a href="https://github.com/bacinger/f1-circuits" target="_blank" rel="noopener">bacinger/f1-circuits</a> (MIT licence)
+    and <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a> (ODbL).
+    This is a fan project and is not associated with Formula 1 or the FIA.
+  </footer>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="../settings/cars.js"></script> <!-- TOP_SPEED for the speed profile -->
+  <script src="../js/util.js"></script>
+  <script src="../js/tracks.js"></script>
+  <script src="../js/data-registry.js"></script>
+  <script src="../data/core-2023.js"></script>
+  <script src="../data/season-2020.js"></script>
+  <script src="pack-builder.js"></script>
+</body>
+</html>

@@ -23,8 +23,14 @@ const PENALTIES = {
   GRID3:      { label: "3-place grid penalty",           short: "-3",   rank: 3 },
   GRID5:      { label: "5-place grid penalty",           short: "-5",   rank: 4 },
   GRID10:     { label: "10-place grid penalty",          short: "-10",  rank: 5 },
-  BACK:       { label: "Start from the back of the grid", short: "BACK", rank: 6 }
+  BACK:       { label: "Start from the back of the grid", short: "BACK", rank: 6 },
+  // championship, FIA desk only (hearings after the session): bans for the next events
+  QBAN:       { label: "Qualifying ban – back of the grid at the next event", short: "QBAN", rank: 6 },
+  BAN1:       { label: "Race ban – 1 Grand Prix",  short: "BAN×1", rank: 8 },
+  BAN2:       { label: "Race ban – 2 Grands Prix", short: "BAN×2", rank: 9 },
+  BAN3:       { label: "Race ban – 3 Grands Prix", short: "BAN×3", rank: 10 }
 };
+const DESK_PENALTY_CODES = ["QBAN", "BAN1", "BAN2", "BAN3"];
 const PENALTY_CODES = ["NFA", "WARNING", "REPRIMAND", "5S", "10S", "DT", "SG10", "DSQ"];
 const QUALI_PENALTY_CODES = ["NFA", "WARNING", "REPRIMAND", "FINE", "DELETE_LAP", "GRID3", "GRID5", "GRID10", "BACK", "DSQ"];
 
@@ -35,9 +41,9 @@ function penaltyCodes() {
 // In qualifying there are no time penalties: the guideline answer becomes a grid penalty etc.
 const QUALI_EQUIVALENT = { "5S": "GRID3", "10S": "GRID5", DT: "GRID5", SG10: "GRID10" };
 const QUALI_BY_TYPE = {
-  PIT_SPEEDING: ["FINE", "In qualifying, speeding in the pit lane is punished with a fine for the team (€100 per km/h over the limit)."],
-  UNSAFE_RELEASE: ["FINE", "In qualifying, an unsafe release is usually punished with a fine for the team."],
-  PIT_EXIT: ["REPRIMAND", "Crossing the pit exit line in qualifying usually gives a reprimand."],
+  PIT_SPEEDING: ["FINE", "Outside the race, speeding in the pit lane is punished with a fine for the team (€100 per km/h over the limit)."],
+  UNSAFE_RELEASE: ["FINE", "Outside the race, an unsafe release is usually punished with a fine for the team."],
+  PIT_EXIT: ["REPRIMAND", "Crossing the pit exit line in qualifying or practice usually gives a reprimand."],
   LEAVING_TRACK: ["DELETE_LAP", "The lap was completed with an advantage gained off track, so the lap time is deleted."]
 };
 
@@ -50,6 +56,7 @@ function qualiTruth(type, truth) {
 
 // "Lap 12" in a race, "Q2" in qualifying
 function lapLabel(n) {
+  if (race.session === "QUALI" && race.setup.practice) return race.setup.practice;
   return race.session === "QUALI" ? (race.setup.sprint ? "SQ" : "Q") + n : "Lap " + n;
 }
 
@@ -81,7 +88,8 @@ function addObstacle(o) {
     id: r.nextId++, type: o.type, s, sector: marshalSectorAt(r.track, s),
     onTrack: !!o.onTrack, required: o.required, progress: 0, carId: o.carId || null, crash: !!o.crash,
     label: o.label, created: r.time, measureAt: null, cleared: false, clearedAt: null,
-    unsafePasses: 0, lastNag: r.time
+    unsafePasses: 0, lastNag: r.time, medicalCarId: o.medicalCarId || null,
+    crew: null // the recovery crew the Race Director sent: { name, arriveAt } (sendRecovery)
   };
   r.obstacles.push(ob);
   marshalYellow(ob.sector - 1, 0);
@@ -104,7 +112,13 @@ function marshalYellow(index, autoClearAfter) {
 function recoveryRate(ob) {
   const r = race;
   const st = r.status;
-  const flag = r.sectorFlags[ob.sector - 1];
+  const flag = shownFlag(ob.sector - 1);
+  if (ob.type === "MEDICAL") {
+    // the medical car only goes out under a Safety Car or a red flag
+    if (st === "RED") return 2;
+    if (st === "SC" || st === "SC_ENDING") return 1.2;
+    return 0;
+  }
   if (ob.type === "BARRIER") {
     if (st === "RED") return 2.2;
     if (st === "SC" || st === "SC_ENDING") return 0.6;
@@ -123,35 +137,290 @@ function recoveryRate(ob) {
 function adequateMeasure(ob) {
   const r = race;
   const st = r.status;
-  const flag = r.sectorFlags[ob.sector - 1];
-  if (ob.type === "BARRIER") return st === "SC" || st === "SC_ENDING" || st === "RED";
+  const flag = shownFlag(ob.sector - 1);
+  if (ob.type === "BARRIER" || ob.type === "MEDICAL") return st === "SC" || st === "SC_ENDING" || st === "RED";
   if (["VSC", "VSC_ENDING", "SC", "SC_ENDING", "RED"].includes(st)) return true;
   if (ob.onTrack) return flag === "DOUBLE";
   return flag !== "GREEN";
+}
+
+// ---------- Recovery crews: the Race Director sends them ----------
+// Nothing is cleared on its own: the Race Director sends the right crew (travel time),
+// and it only works when the flags protect it.
+function crewFor(ob) {
+  // the crews and their travel times: settings/marshals.js
+  if (ob.type === "CAR") return ob.onTrack ? CREWS.CAR_ON_TRACK : CREWS.CAR_OFF;
+  return CREWS[ob.type] || CREWS.DEBRIS;
+}
+
+// " is" / " are" (the marshals)
+function crewVerb(ob) {
+  return /^marshals/.test(ob.crew.name) ? " are" : " is";
+}
+
+function sendRecovery(id) {
+  const r = race;
+  const ob = r.obstacles.find(o => o.id === id);
+  if (!ob || ob.cleared) return "This has been cleared already.";
+  if (ob.crew) return "Already sent: " + ob.crew.name + ".";
+  const c = crewFor(ob);
+  ob.crew = { name: c.name, arriveAt: r.time + rand(c.travel[0], c.travel[1]), sentAt: r.time };
+  addAlert("info", "Marshal post " + ob.sector + ": " + c.name + " sent to " + ob.label + ".", { s: ob.s, sector: ob.sector });
+  r.ver++;
+}
+
+// The state of a recovery job for the "On track" list (ui.js)
+function recoveryState(ob) {
+  const r = race;
+  if (!ob.crew) return { key: "NONE", text: "no crew sent" };
+  if (r.time < ob.crew.arriveAt) return { key: "TRAVEL", text: ob.crew.name + " arrives in " + Math.ceil(ob.crew.arriveAt - r.time) + " s" };
+  if (recoveryRate(ob) === 0) {
+    const needs = ob.type === "BARRIER" || ob.type === "MEDICAL" ? "SC or red flag" : ob.onTrack ? "double yellow or neutralisation" : "a yellow flag";
+    return { key: "WAIT", text: ob.crew.name + " waiting for " + needs };
+  }
+  return { key: "WORK", text: ob.crew.name + " working – " + Math.round(ob.progress * 100) + " %" };
 }
 
 function updateObstacles() {
   const r = race;
   for (const ob of r.obstacles) {
     if (ob.cleared) continue;
-    const rate = recoveryRate(ob);
-    if (rate > 0) ob.progress += DT * rate / ob.required;
+    // the option "send recovery automatically" (and the AI Race Director)
+    if (!ob.crew && r.autoRecovery && r.time - ob.created > 3) sendRecovery(ob.id);
+    const crewThere = ob.crew && r.time >= ob.crew.arriveAt;
+    const rate = crewThere ? recoveryRate(ob) : 0;
+    if (rate > 0) {
+      ob.progress += DT * rate / ob.required;
+      ob.working = true;
+    }
     if (ob.measureAt === null && adequateMeasure(ob)) ob.measureAt = r.time;
 
     // marshals working on the track while cars still pass at (almost) racing speed
-    const neutral = ["VSC", "VSC_ENDING", "SC", "SC_ENDING", "RED"].includes(r.status);
+    const neutral = NEUTRALISED.has(r.status);
     if (ob.onTrack && rate > 0 && !neutral) r.evalData.marshalRisk += DT;
+
+    // the crew is out on the track and the protection was taken away (sector green / single yellow)
+    if (crewThere && ob.working && (ob.onTrack || ob.type === "MEDICAL") && !adequateMeasure(ob) && r.status !== "RED") {
+      r.evalData.marshalExposed += DT;
+      if (!ob.exposedWarned) {
+        ob.exposedWarned = true;
+        addAlert("danger", "Marshal post " + ob.sector + ": the " + ob.crew.name + crewVerb(ob) + " still on the track at " + ob.label +
+          " – the sector needs a double yellow flag (or a neutralisation) until the work is done!", { s: ob.s, sector: ob.sector });
+      }
+      if (chance(DT * 0.012 * r.level)) {
+        r.evalData.nearMisses++;
+        addAlert("danger", "NEAR MISS at marshal post " + ob.sector + ": a car passed the " + ob.crew.name + " at racing speed.", { s: ob.s, sector: ob.sector });
+      }
+    } else if (ob.exposedWarned && adequateMeasure(ob)) ob.exposedWarned = false;
 
     if (ob.progress >= 1) {
       clearObstacle(ob);
-    } else if (rate === 0 && r.time - ob.lastNag > 45) {
+    } else if (!ob.crew && r.time - ob.lastNag > 30) {
       ob.lastNag = r.time;
-      const needs = ob.type === "BARRIER" ? "a Safety Car or a red flag"
+      addAlert("warn", "Marshal post " + ob.sector + ": " + ob.label + " – send the " + crewFor(ob).name + " (list \"On track\").",
+        { s: ob.s, sector: ob.sector });
+    } else if (crewThere && rate === 0 && r.time - ob.lastNag > 45) {
+      ob.lastNag = r.time;
+      const needs = ob.type === "BARRIER" || ob.type === "MEDICAL" ? "a Safety Car or a red flag"
                   : ob.onTrack ? "a double yellow flag or a neutralisation" : "at least a yellow flag";
-      addAlert("warn", "Marshal post " + ob.sector + ": waiting for " + needs + " to recover " + ob.label + ".",
+      addAlert("warn", "Marshal post " + ob.sector + ": the " + ob.crew.name + crewVerb(ob) + " waiting for " + needs + " to recover " + ob.label + ".",
         { s: ob.s, sector: ob.sector });
     }
+    // the time obstacles wait for a crew counts in the rating
+    if (!ob.cleared && !ob.crew) r.evalData.recoveryWait += DT;
+    // a driver after a heavy impact waits for the medical car (no neutralisation yet)
+    if (!ob.cleared && ob.type === "MEDICAL" && !adequateMeasure(ob)) r.evalData.medicalWait = (r.evalData.medicalWait || 0) + DT;
   }
+}
+
+// =====================================================================
+//  TEAM RADIO: complaints and requests of the teams to the Race Director
+// =====================================================================
+// kind COMPLAINT: about another car. valid = there really was an offence (an incident the
+//   Race Director has not handled yet – inc), or not (a complaint about clean racing).
+// kind REQUEST: wet race, debris, pit exit – it is resolved when the problem is solved.
+// status: NEW, NOTED, INVESTIGATING, REJECTED, RESOLVED
+function addRadio(car, kind, text, o) {
+  const r = race;
+  o = o || {};
+  const msg = { id: r.nextId++, t: r.time, lap: r.leaderLap, kind, carId: car ? car.id : null, team: car ? car.team : "",
+    text, valid: o.valid !== false, incId: o.incId || null, accused: o.accused || null, topic: o.topic || null,
+    status: o.status || "NEW", answeredAt: null };
+  r.radio.push(msg);
+  r.ver++;
+  return msg;
+}
+
+// ---------- Team orders: team-mates swap places (legal, heard on the team radio) ----------
+// A faster car right behind its team-mate: the team may tell the car ahead to let it by.
+// Sometimes the driver refuses; a swap in a dangerous place becomes an incident.
+function teamOrdersTick() {
+  const r = race;
+  if (r.session !== "RACE" || r.phase !== "RACE" || r.status !== "GREEN" || r.chequered) return;
+  r.teamOrderLap = r.teamOrderLap || {};
+  for (const b of r.cars) {
+    const a = b.aheadCar;
+    if (!a || a.team !== b.team || b.mode !== "RACE" || a.mode !== "RACE" || b.pit.state || a.pit.state || b.passing || a.passing) continue;
+    if (b.gapAheadM > Math.max(20, b.speed * 1.0) || b.laps < 2 || b.laps !== a.laps) continue;
+    if ((r.teamOrderLap[b.team] || -99) > b.laps - 12) continue;
+    const faster = b.factorNow > a.factorNow * 1.004 || b.tyre.wear + 0.15 < a.tyre.wear;
+    if (!faster || !chance(0.03)) continue;
+    r.teamOrderLap[b.team] = b.laps;
+    const refuse = chance(0.15);
+    addRadio(a, "TEAM", a.team + " → car " + a.number + " (" + a.code + "): let car " + b.number + " (" + b.code + ") through, " +
+      (b.tyre.wear + 0.15 < a.tyre.wear ? "the tyres are going off." : "the other car is faster."), { status: "INFO" });
+    setTimeoutRace(rand(4, 9), () => {
+      if (race !== r) return;
+      if (refuse) {
+        addRadio(a, "TEAM", "Car " + a.number + " (" + a.code + "): \"No. If that car is faster, it can pass me on track.\"", { status: "INFO" });
+        return;
+      }
+      if (a.mode !== "RACE" || b.mode !== "RACE" || b.aheadCar !== a || a.pit.state || b.pit.state) return;
+      addRadio(a, "TEAM", "Car " + a.number + " (" + a.code + "): \"Understood.\" – lets car " + b.number + " (" + b.code + ") by (" + locationName(r.track, a.s) + ").", { status: "INFO" });
+      startPass(b, a);
+      r.overtakes--; // a swap is not an overtake on track
+      // a swap in a braking zone or a fast corner can be dangerous for the cars behind
+      if (chance(0.04)) {
+        const behind = r.cars.find(c => c.aheadCar === b && c.mode === "RACE" && c.gapAheadM < 40);
+        if (behind) {
+          makeIncident("OTHER", [a, behind], {
+            offence: "Erratic driving (slowing down to let the team-mate by)", s: a.s,
+            summary: a.code + " lifted suddenly to let " + b.code + " by; " + behind.code + " had to take avoiding action.",
+            evidence: [["Team radio", "Team order to let car " + b.number + " by"], ["Speed drop of " + a.code, rand(40, 90).toFixed(0) + " km/h on the racing line"],
+              [behind.code + " reaction", "Braked hard and went off line"]],
+            statements: [[a.code, "The team told me to let him by, I did it as early as I could."], [behind.code, "He just stopped on the racing line."]],
+            truth: { culprit: a.id, penalty: "REPRIMAND", points: 0, reason: "Letting a team-mate by is allowed, but not by slowing down suddenly on the racing line in front of other cars." }
+          });
+        }
+      }
+    });
+  }
+}
+
+function radioTick() {
+  const r = race;
+  if (!r.radio || r.finished || r.phase === "PRE") return;
+  teamOrdersTick();
+  const L = r.track.length;
+  const open = topic => r.radio.some(m => m.topic === topic && (m.status === "NEW" || m.status === "NOTED"));
+
+  // 0. a complaint about an incident the Race Director has handled meanwhile is answered by that
+  //    (decided, not investigated, under investigation) – it does not stay open in the list
+  for (const m of r.radio) {
+    if (m.kind !== "COMPLAINT" || !m.incId || (m.status !== "NEW" && m.status !== "NOTED")) continue;
+    const inc = r.incidents.find(i => i.id === m.incId);
+    if (inc && inc.status !== "NEW" && inc.status !== "NOTED") {
+      m.status = inc.status === "NFI" ? "REJECTED" : inc.status === "DECIDED" ? "RESOLVED" : "INVESTIGATING";
+      m.answeredAt = r.time;
+      m.autoClosed = true;
+    }
+  }
+
+  // 1. a real offence the Race Director has not looked at: the victim's team asks for an investigation
+  for (const inc of r.incidents) {
+    if (inc.radioAsked || inc.historic || inc.status !== "NEW" || r.time - inc.t < 50) continue;
+    inc.radioAsked = true;
+    if (!inc.truth || !inc.truth.culprit || inc.cars.length < 2 || !chance(0.6)) continue;
+    const victim = carById(inc.cars.find(id => id !== inc.truth.culprit));
+    const culprit = carById(inc.truth.culprit);
+    if (!victim || !culprit) continue;
+    addRadio(victim, "COMPLAINT", "Car " + victim.number + " (" + victim.code + "): we ask the stewards to look at car " + culprit.number +
+      " (" + culprit.code + ") – " + inc.offence.toLowerCase() + " at " + inc.location + ".", { incId: inc.id, accused: culprit.id, valid: true });
+  }
+
+  // 2. complaints about clean racing (the Race Director should not punish everything)
+  if (r.session === "RACE" && r.status === "GREEN" && chance(0.001 * r.level)) {
+    const close = r.cars.filter(c => c.mode === "RACE" && !c.pit.state && c.aheadCar && c.gapAheadM < 12 && c.speed > 30);
+    if (close.length) {
+      const me = pick(close);
+      const them = me.aheadCar;
+      const what = pick(["moved under braking", "blocked us on the straight", "squeezed us towards the wall", "changed direction twice"]);
+      addRadio(me, "COMPLAINT", "Car " + me.number + " (" + me.code + "): car " + them.number + " (" + them.code + ") " + what +
+        " at " + locationName(r.track, me.s) + ". Please investigate!", { accused: them.id, valid: false, topic: "S" + Math.round(me.s / 50) });
+    }
+  }
+
+  // 3. requests: something the Race Director should do
+  const someone = () => pick(r.cars.filter(c => isRunning(c)));
+  if (r.session === "RACE" && !r.wetDeclared && (r.weather.wetMax !== undefined ? r.weather.wetMax : r.weather.wet) > 0.35 && !open("WET") && chance(0.05)) {
+    const c = someone();
+    if (c) addRadio(c, "REQUEST", c.team + ": the track is getting wet – please declare a wet race.", { topic: "WET" });
+  }
+  for (const ob of r.obstacles) {
+    if (ob.cleared || ob.crew || ob.radioAsked || r.time - ob.created < 20) continue;
+    ob.radioAsked = true;
+    const c = someone();
+    if (c) addRadio(c, "REQUEST", c.team + ": " + ob.label + " at marshal post " + ob.sector + " – please send the marshals.", { topic: "OB" + ob.id });
+  }
+  if (r.session === "RACE" && !r.pitExitOpen && r.status !== "RED" && r.raceStart !== null && r.time - r.lastStart > 30 && !open("EXIT")) {
+    const waiting = r.cars.find(c => (c.pitStart && c.pit.state === "HOLD") || (c.pit.state === "OUT" && c.mode === "RACE"));
+    if (waiting) addRadio(waiting, "REQUEST", "Car " + waiting.number + " (" + waiting.code + ") is waiting at the red light – please open the pit exit.", { topic: "EXIT" });
+  }
+
+  // requests that are solved close themselves
+  for (const m of r.radio) {
+    if (m.kind !== "REQUEST" || (m.status !== "NEW" && m.status !== "NOTED")) continue;
+    let solved = false;
+    if (m.topic === "WET") solved = r.wetDeclared;
+    else if (m.topic === "EXIT") solved = r.pitExitOpen;
+    else if (m.topic && m.topic.startsWith("OB")) {
+      const ob = r.obstacles.find(o => "OB" + o.id === m.topic);
+      solved = !ob || ob.cleared || !!ob.crew;
+    }
+    if (solved) {
+      m.status = "RESOLVED";
+      m.answeredAt = r.time;
+      r.ver++;
+    }
+  }
+}
+
+// The Race Director answers: "NOTE", "INVESTIGATE" or "REJECT". Returns an error text or null.
+function answerRadio(id, answer) {
+  const r = race;
+  const m = r.radio.find(x => x.id === id);
+  if (!m || (m.status !== "NEW" && m.status !== "NOTED")) return "Already answered.";
+  m.answeredAt = r.time;
+  const inc = m.incId ? r.incidents.find(i => i.id === m.incId) : null;
+  if (answer === "NOTE") {
+    m.status = "NOTED";
+    if (inc && inc.status === "NEW") noteIncident(inc);
+  } else if (answer === "REJECT") {
+    m.status = "REJECTED";
+    publish("FIA: " + (m.kind === "COMPLAINT" ? "THE COMPLAINT OF " + teamWord(m) + " WILL NOT BE INVESTIGATED" : "THE REQUEST OF " + teamWord(m) + " IS DECLINED"), "Stewards");
+  } else if (answer === "INVESTIGATE") {
+    if (m.kind !== "COMPLAINT") return "Only a complaint can be investigated.";
+    m.status = "INVESTIGATING";
+    if (inc) {
+      if (inc.status === "NEW" || inc.status === "NOTED") investigateIncident(inc);
+      return { openIncident: inc.id };
+    }
+    // a complaint about clean racing: the stewards look at it – the footage shows no offence
+    const me = carById(m.carId);
+    const them = carById(m.accused);
+    if (!me || !them) return null;
+    const complaint = makeIncident("COMPLAINT", [them, me], {
+      offence: "Complaint by " + (m.team || "a team") + ": defending", s: me.s,
+      truth: { culprit: null, penalty: "NFA", points: 0, reason: "The footage shows one move only and no change of direction under braking. Hard but fair racing – no further action." },
+      summary: m.text,
+      evidence: [
+        ["Complaint", m.text],
+        ["Steering " + them.code, "One defensive move before the braking zone, then the normal line"],
+        ["Gap", rand(0.2, 0.6).toFixed(2) + " s between the cars"],
+        ["Contact", "None"]
+      ],
+      statements: [[me.code, "He moved when I was already committed."], [them.code, "I defended once, that is allowed."]]
+    });
+    m.incId = complaint.id;
+    investigateIncident(complaint);
+    return { openIncident: complaint.id };
+  }
+  r.ver++;
+  return null;
+}
+
+function teamWord(m) {
+  return (m.team || "the team").toUpperCase();
 }
 
 function clearObstacle(ob) {
@@ -166,9 +435,32 @@ function clearObstacle(ob) {
     }
   }
   const othersInSector = r.obstacles.some(o => !o.cleared && o.sector === ob.sector);
-  addAlert("info", "Marshal post " + ob.sector + ": " + ob.label + " has been cleared." +
-    (othersInSector ? "" : " Sector " + ob.sector + " is clear."), { s: ob.s, sector: ob.sector });
+  if (ob.type === "MEDICAL") {
+    addAlert("info", "Medical car: the driver has been taken to the medical centre (" + ob.label + ").", { s: ob.s, sector: ob.sector });
+    scheduleMedicalCheck(ob);
+  } else {
+    addAlert("info", "Marshal post " + ob.sector + ": " + ob.label + " has been cleared." +
+      (othersInSector ? "" : " Sector " + ob.sector + " is clear."), { s: ob.s, sector: ob.sector });
+  }
   r.ver++;
+}
+
+// After the medical car: the FIA doctor checks the driver in the medical centre.
+// The heavier the impact, the more likely the driver is not fit to continue.
+function scheduleMedicalCheck(ob) {
+  const r = race;
+  const car = carById(ob.medicalCarId);
+  if (!car) return;
+  setTimeoutRace(rand(20, 60), () => {
+    if (race !== r) return;
+    const g = car.impactG || 40;
+    const fit = !chance(clamp((g - 30) / 45, 0.05, 0.8));
+    r.medical = r.medical || [];
+    r.medical.push({ carId: car.id, driverId: car.driverId, g, fit });
+    addAlert(fit ? "info" : "warn", "Medical centre: " + car.name + " (" + car.number + ") has been checked after the " + g + " g impact – " +
+      (fit ? "declared FIT." : "declared NOT FIT to continue."), { carId: car.id });
+    publish("MEDICAL: CAR " + car.number + " (" + car.code + ") DRIVER " + (fit ? "DECLARED FIT" : "NOT FIT TO CONTINUE – CHECKED BY THE FIA DOCTOR"), "Info");
+  });
 }
 
 // A car drives past an obstacle: does something happen?
@@ -505,29 +797,32 @@ function setTimeoutRace(seconds, action) {
 
 function runRaceTimers() {
   const r = race;
-  if (!r.timers) return;
+  if (!r.timers || r.timers.length === 0) return;
+  let fired = false;
   for (const t of r.timers) {
     if (!t.done && r.time >= t.at) {
       t.done = true;
+      fired = true;
       t.action();
     }
   }
-  r.timers = r.timers.filter(t => !t.done);
+  if (fired) r.timers = r.timers.filter(t => !t.done);
 }
 
 // ---------- Pit lane speeding ----------
 function pitSpeedingIncident(car, kmh, historic) {
   if (!(historic) && offenceSkipped()) return null; // championship: realistic number of offences
+  const limitKmh = race.pitLimitKmh || 80;
   return makeIncident("PIT_SPEEDING", [car], {
     offence: "Speeding in the pit lane", s: race.track.pit.boxes[0], location: "the pit lane",
     summary: carLabel(car) + " was too fast in the pit lane.",
     evidence: [
-      ["Speed trap (pit lane)", kmh.toFixed(1) + " km/h – limit 80.0 km/h"],
-      ["Over the limit by", (kmh - 80).toFixed(1) + " km/h"],
-      ["Pit limiter", kmh - 80 < 1 ? "Engaged, but released a little too early before the exit line" : "Engaged " + rand(5, 20).toFixed(0) + " m after the speed line"]
+      ["Speed trap (pit lane)", kmh.toFixed(1) + " km/h – limit " + limitKmh.toFixed(1) + " km/h"],
+      ["Over the limit by", (kmh - limitKmh).toFixed(1) + " km/h"],
+      ["Pit limiter", kmh - limitKmh < 1 ? "Engaged, but released a little too early before the exit line" : "Engaged " + rand(5, 20).toFixed(0) + " m after the speed line"]
     ],
     statements: [[car.code, "The limiter was on, I don't know what happened."]],
-    truth: { culprit: car.id, penalty: "5S", points: 0, reason: "Any speed above 80 km/h in the pit lane is an offence. In the race the standard penalty is a 5 second time penalty." },
+    truth: { culprit: car.id, penalty: "5S", points: 0, reason: "Any speed above " + limitKmh + " km/h in the pit lane is an offence. In the race the standard penalty is a 5 second time penalty." },
     historic
   });
 }
@@ -591,7 +886,7 @@ function blueFlagIncident(car, follower, held, historic) {
 
 // ---------- Yellow / SC / VSC offences ----------
 function overtakeUnderYellowIncident(att, victim, sectorIndex, historic) {
-  const flag = race.sectorFlags[sectorIndex];
+  const flag = shownFlag(sectorIndex);
   const gaveBack = chance(0.3);
   if (gaveBack) {
     setTimeoutRace(4, () => {
@@ -630,18 +925,20 @@ function doubleYellowIncident(car, sectorIndex, historic) {
   });
 }
 
-function vscDeltaIncident(car, sectorIndex, historic) {
+// measured: { delta, segs, sector } from the live delta check (engine.js checkNeutralDelta)
+function vscDeltaIncident(car, sectorIndex, historic, measured) {
   if (!(historic) && offenceSkipped()) return null; // championship: realistic number of offences
-  const delta = rand(0.1, 0.9);
+  const delta = measured ? measured.delta : rand(0.1, 0.9);
+  const segs = measured ? measured.segs : delta > 0.4 ? 3 : 1;
   return makeIncident("VSC_DELTA", [car], {
     offence: "Exceeding the VSC delta time", s: car.s,
     summary: carLabel(car) + " was faster than allowed under the VSC.",
     evidence: [
-      ["Delta time", "-" + delta.toFixed(2) + " s below the minimum time in marshal sector " + (sectorIndex + 1)],
-      ["Number of segments over the limit", delta > 0.4 ? "3" : "1"]
+      ["Delta time", "-" + delta.toFixed(2) + " s below the minimum time (worst value" + (measured ? ", first in marshal sector " + measured.sector : " in marshal sector " + (sectorIndex + 1)) + ")"],
+      ["Number of segments below the minimum time", String(segs)]
     ],
     statements: [[car.code, "The delta on my dash was positive the whole time."]],
-    truth: delta > 0.4
+    truth: delta > (measured ? 0.3 : 0.4)
       ? { culprit: car.id, penalty: "5S", points: 1, reason: "The driver was clearly under the VSC minimum time." }
       : { culprit: car.id, penalty: "REPRIMAND", points: 0, reason: "A small and short deviation from the VSC delta – a reprimand is usual." },
     historic
@@ -681,6 +978,24 @@ function pitEntryClosedIncident(car, historic) {
   });
 }
 
+// Practice starts (qualifying / practice): the event notes say where they are allowed.
+// A car leaving the pit lane sometimes does one in the wrong place – a reprimand.
+const PRACTICE_START_RISK = { PIT_EXIT: 0.006, AFTER_LIGHT: 0.003, NONE: 0.012 };
+function practiceStartCheck(car) {
+  const r = race;
+  const rule = (r.eventNotes && r.eventNotes.practiceStarts) || "PIT_EXIT";
+  if (!chance(PRACTICE_START_RISK[rule] * r.level)) return null;
+  if (offenceSkipped()) return null;
+  const where = rule === "NONE" ? "after the pit exit" : rule === "PIT_EXIT" ? "on the track after the pit exit, in the racing line" : "on the racing line before the pit exit light";
+  return makeIncident("PRACTICE_START", [car], {
+    offence: "Practice start in a non-designated area", s: r.track.pit.exit + 80, location: "the pit exit",
+    summary: carLabel(car) + " carried out a practice start " + where + ".",
+    evidence: [["Event notes", "Practice starts " + (PRACTICE_START_TEXT[rule] || "only at the end of the pit exit")], ["Onboard camera", "Full-throttle start from standstill " + where]],
+    statements: [[car.code, "I thought it was allowed there, the track behind me was clear."]],
+    truth: { culprit: car.id, penalty: "REPRIMAND", points: 0, reason: "Practice starts are only allowed where the event notes say. A practice start in another place is usually punished with a reprimand." }
+  });
+}
+
 function pitExitLineIncident(car, historic) {
   if (!(historic) && offenceSkipped()) return null; // championship: realistic number of offences
   return makeIncident("PIT_EXIT", [car], {
@@ -717,7 +1032,8 @@ function unsafeRejoinIncident(car, other, historic) {
 // variant "MAX_DELTA": qualifying – a car on an out lap / in lap was slower than the maximum
 //                      delta time (driving too slowly to create a gap is dangerous)
 // variant "SC_DELTA":  race – a car under the Safety Car was faster than the SC delta time
-function rdInstructionIncident(cars, variant, historic) {
+// measured (SC_DELTA): { delta, segs, sector } from the live delta check (engine.js checkNeutralDelta)
+function rdInstructionIncident(cars, variant, historic, measured) {
   if (!(historic) && offenceSkipped()) return null; // championship: realistic number of offences
   const car = cars[0];
   const list = cars.map(c => c.code).join(", ");
@@ -727,16 +1043,18 @@ function rdInstructionIncident(cars, variant, historic) {
   let offence;
 
   if (variant === "SC_DELTA") {
-    const delta = rand(0.2, 1.6);
+    const delta = measured ? measured.delta : rand(0.2, 1.6);
+    const limit = measured ? 0.5 : 0.8;
     offence = "Failing to follow the Race Director's instructions – Safety Car delta time";
     summary = list + " did not respect the Safety Car delta time.";
     evidence = [
       ["Track status", "SAFETY CAR"],
       ["Race Director's instruction", "Stay above the Safety Car delta time until the Safety Car line"],
-      ["Delta time of " + car.code, "-" + delta.toFixed(2) + " s (faster than allowed) in marshal sector " + marshalSectorAt(race.track, car.s)],
-      ["Advantage", delta > 0.8 ? "Closed up " + rand(1, 3).toFixed(1) + " s on the queue" : "None measurable"]
+      ["Delta time of " + car.code, "-" + delta.toFixed(2) + " s (faster than allowed, worst value) from marshal sector " + (measured ? measured.sector : marshalSectorAt(race.track, car.s))],
+      ["Segments below the minimum time", measured ? String(measured.segs) : "–"],
+      ["Advantage", delta > limit ? "Closed up about " + delta.toFixed(1) + " s on the queue" : "None measurable"]
     ];
-    truth = delta > 0.8
+    truth = delta > limit
       ? { culprit: car.id, penalty: "5S", points: 1, reason: "The driver clearly went faster than the Safety Car delta time and gained time on the queue." }
       : { culprit: car.id, penalty: "REPRIMAND", points: 0, reason: "A small and short deviation from the Safety Car delta – a reprimand is usual." };
   } else {
@@ -874,14 +1192,17 @@ function titleCase(text) {
 function createTrackLimits(car, corner, opts) {
   const r = race;
   const violation = opts.real ? true : chance(0.88);
+  // how far the car was beyond the white line (m): + = all four wheels off, ≤ 0 = still touching the line
+  const beyond = violation ? Math.round(rand(0.2, 1.3) * 10) / 10 : -Math.round(rand(0.05, 0.3) * 100) / 100;
   const item = {
-    id: r.nextId++, carId: car.id, lap: car.laps + 1, corner: corner.name, t: r.time,
-    status: "NEW", violation,
+    id: r.nextId++, carId: car.id, lap: car.laps + 1, corner: corner.name, cornerNo: corner.number, t: r.time,
+    s: mod(corner.apex + 35, r.track.length), // the exit of the corner
+    status: "NEW", violation, beyond,
     evidence: violation
-      ? pick(["All four wheels beyond the white line at the exit of " + corner.name,
-              "Car fully over the exit kerb, " + rand(0.3, 1.2).toFixed(1) + " m beyond the white line"])
+      ? "All four wheels beyond the white line at the exit of " + corner.name + " (" + beyond.toFixed(1) + " m)"
       : "Right-side wheels ON the white line – part of the car still touching the track",
-    real: opts.real || null
+    real: opts.real || null,
+    clip: null, clipAt: r.time + 3 // the replay: 5 s before to 3 s after (engine.js updateClips)
   };
   r.trackLimits.push(item);
   r.ver++;
@@ -1155,6 +1476,23 @@ function computeEvaluation() {
     safetyScore -= 8;
     safetyNotes.push(["ok", "Marshals worked on the track for " + Math.round(e.marshalRisk) + " s under double yellow only (cars still at racing speed)."]);
   }
+  if (e.marshalExposed > 3) {
+    safetyScore -= Math.min(35, 10 + Math.round(e.marshalExposed / 2) + 10 * (e.nearMisses || 0));
+    safetyNotes.push(["bad", "Recovery crews were on the track without protection (sector green or single yellow) for " + Math.round(e.marshalExposed) + " s" +
+      (e.nearMisses ? " – " + e.nearMisses + " near miss(es)." : ".")]);
+  }
+  if (e.rainUnsignalled > 30) {
+    safetyScore -= Math.min(15, 4 + Math.round(e.rainUnsignalled / 30));
+    safetyNotes.push(["ok", "It rained in parts of the track for " + Math.round(e.rainUnsignalled) + " s without the rain signal (or the slippery flag) in those sectors."]);
+  }
+  if (e.medicalWait > 20) {
+    safetyScore -= Math.min(30, 8 + Math.round((e.medicalWait - 20) / 5));
+    safetyNotes.push(["bad", "After a heavy impact the medical car could not go out for " + Math.round(e.medicalWait) + " s – call a Safety Car or a red flag at once."]);
+  }
+  if (e.recoveryWait > 60) {
+    safetyScore -= Math.min(20, Math.round((e.recoveryWait - 60) / 10));
+    safetyNotes.push(["ok", "Obstacles waited " + Math.round(e.recoveryWait) + " s in total until you sent a recovery crew."]);
+  }
   if (safetyNotes.length === 0) safetyNotes.push(["good", "No dangerous situations on track."]);
   items.push({ title: "Track safety", score: clamp(safetyScore, 0, 100), notes: safetyNotes });
 
@@ -1189,6 +1527,11 @@ function computeEvaluation() {
         (score ? " (fine, no offence)." : " – guideline: " + PENALTIES[inc.truth.penalty].label + ".")]);
       continue;
     }
+    // championship: still under investigation -> a hearing on the FIA desk (rated there)
+    if ((inc.status === "AFTER_RACE" || inc.status === "INVESTIGATING") && r.setup.seasonContext && !r.setup.seasonContext.auto) {
+      stewardNotes.push(["ok", incidentCars(inc) + " – " + inc.offence + ": goes to a hearing on the FIA desk."]);
+      continue;
+    }
     if (inc.status !== "DECIDED") {
       max += 10;
       stewardNotes.push(["bad", incidentCars(inc) + " – " + inc.offence + ": no decision taken."]);
@@ -1196,11 +1539,44 @@ function computeEvaluation() {
     }
     const ev = evaluateDecision(inc);
     max += 10;
-    total += ev.score;
-    stewardNotes.push([ev.score >= 10 ? "good" : ev.score >= 6 ? "ok" : "bad", incidentCars(inc) + " – " + inc.offence + ": " + ev.text]);
+    // consistency: the same situation got another penalty before (stewards.js)
+    const other = inconsistentWith(inc);
+    const score = other ? Math.max(0, ev.score - 3) : ev.score;
+    total += score;
+    stewardNotes.push([score >= 10 ? "good" : score >= 6 ? "ok" : "bad", incidentCars(inc) + " – " + inc.offence + ": " + ev.text +
+      (other ? " Not consistent: the same situation at " + other.where + " got " + PENALTIES[other.code].label.toLowerCase() + "." : "")]);
   }
   if (stewardNotes.length === 0) stewardNotes.push(["good", "No incidents needed a decision."]);
   items.push({ title: "Stewarding decisions", score: max ? Math.round(total / max * 100) : 100, notes: stewardNotes });
+
+  // ----- Team radio: were the complaints and requests of the teams handled well? -----
+  const radio = (r.radio || []).filter(m => m.kind !== "TEAM"); // team orders are only heard, not answered
+  if (radio.length) {
+    const radioNotes = [];
+    let got = 0;
+    let of = 0;
+    // (a complaint answered by handling the incident itself is rated with that incident)
+    for (const m of radio.filter(x => x.kind === "COMPLAINT" && !x.autoClosed)) {
+      of += 10;
+      const who = m.team + " about car " + (carById(m.accused) ? carById(m.accused).code : "?");
+      const table = m.valid
+        ? { INVESTIGATING: [10, "good", "investigated – the complaint was justified"], NOTED: [7, "ok", "noted – it was a real offence, an investigation was needed"],
+            REJECTED: [0, "bad", "rejected – but it was a real offence"], NEW: [2, "bad", "never answered – it was a real offence"] }
+        : { REJECTED: [10, "good", "rejected – right, it was hard but fair racing"], NOTED: [8, "ok", "noted – no offence"],
+            INVESTIGATING: [7, "ok", "investigated – the footage showed no offence"], NEW: [6, "ok", "never answered (no offence)"] };
+      const [score, kind, text] = table[m.status] || [5, "ok", m.status];
+      got += score;
+      radioNotes.push([kind, "Complaint of " + who + ": " + text + "."]);
+    }
+    const requests = radio.filter(x => x.kind === "REQUEST");
+    const slow = requests.filter(m => (m.status === "RESOLVED" ? m.answeredAt : r.time) - m.t > 60);
+    if (requests.length) {
+      of += 10 * requests.length;
+      got += 10 * (requests.length - slow.length) + 3 * slow.length;
+      radioNotes.push([slow.length ? "ok" : "good", requests.length + " request(s) of the teams, " + (slow.length ? slow.length + " of them handled only after more than a minute." : "all handled within a minute.")]);
+    }
+    items.push({ title: "Team radio", score: of ? Math.round(got / of * 100) : 100, notes: radioNotes });
+  }
 
   // ----- 4. Track limits -----
   let tlRight = 0;
@@ -1232,6 +1608,10 @@ function computeEvaluation() {
   }
   const unserved = r.cars.filter(c => c.pen.failedServe).length;
   if (unserved) manageNotes.push(["ok", unserved + " penalty(ies) were not served in time."]);
+  if (e.exitWait > 15) {
+    manageScore -= Math.min(30, Math.round(e.exitWait / 6));
+    manageNotes.push(["bad", "Cars waited " + Math.round(e.exitWait) + " s at the closed pit exit after the field had passed."]);
+  }
   if (manageNotes.length === 0) manageNotes.push(["good", "Neutralisations and " + (is2026() ? "the active aero / Overtake Mode were" : "DRS were") + " used sensibly."]);
   items.push({ title: r.session === "QUALI" ? "Session management" : "Race management", score: clamp(manageScore, 0, 100), notes: manageNotes });
 

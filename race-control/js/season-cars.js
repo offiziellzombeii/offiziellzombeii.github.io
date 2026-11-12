@@ -40,9 +40,19 @@ const PU_SUPPLIERS = {
 
 const CAR_AREAS = { aero: "Aerodynamics", power: "Power unit", chassis: "Chassis", tyres: "Tyre wear", reliability: "Reliability" };
 const PU_ELEMENT_NAMES = { ICE: "Internal combustion engine", TC: "Turbocharger", "MGU-H": "MGU-H", "MGU-K": "MGU-K", ES: "Energy store", CE: "Control electronics", EX: "Exhaust" };
+const PU_SHORT_NAMES = { ICE: "Engine", TC: "Turbo", "MGU-H": "MGU-H", "MGU-K": "MGU-K", ES: "Battery", CE: "Electronics", EX: "Exhaust" };
+
+// Engine names in the data packs -> suppliers of the rating tables
+const PU_ALIASES = { Honda: "Honda RBPT", RBPT: "Honda RBPT", "Red Bull Powertrains": "Honda RBPT", TAG: "Honda RBPT" };
 
 function puSupplier(s, teamId) {
   const table = PU_SUPPLIERS[s.generation] || PU_SUPPLIERS.GE2023;
+  // the engine of the team in the base year (data packs of other eras, e.g. McLaren-Renault 2020)
+  const info = teamInYear(teamId, s.baseYear);
+  if (info && info.engine && s.generation !== "GEN2026") {
+    const name = table.rating[info.engine] !== undefined ? info.engine : PU_ALIASES[info.engine];
+    if (name && table.rating[name] !== undefined) return name;
+  }
   return table.teams[teamId] || "Ferrari";
 }
 
@@ -72,8 +82,7 @@ function ensureCarModel(s) {
       chassis: round1(clamp(rest + (rnd() - 0.5) * 6, 55, 100)),
       power: round1(clamp(power, 55, 100)),
       tyres: round1(clamp(55 + (overall - 80) * 0.6 + (rnd() - 0.5) * 30, 30, 95)),
-      reliability: round1(clamp(0.5 * table.reliability[supplier] + 0.5 * (60 + (overall - 70) * 0.9) + (rnd() - 0.5) * 8, 50, 97)),
-      perf: null // old interim value, no longer used
+      reliability: round1(clamp(0.5 * table.reliability[supplier] + 0.5 * (60 + (overall - 70) * 0.9) + (rnd() - 0.5) * 8, 50, 97))
     };
   }
 }
@@ -140,7 +149,8 @@ function ensurePowerUnits(s) {
 
 // Before the first session of a weekend: does a driver need new elements?
 // Returns the log lines. Grid penalties go to carryGrid / carryBack.
-function powerUnitsForWeekend(s, round) {
+// arrivals (optional): structured items for the "Weekend arrivals" card of the hub
+function powerUnitsForWeekend(s, round, arrivals) {
   ensurePowerUnits(s);
   const lines = [];
   const ch = CIRCUIT_CHARACTER[round.circuit] || {};
@@ -159,11 +169,12 @@ function powerUnitsForWeekend(s, round) {
       el.count++;
       el.age = 0;
       el.failed = false;
-      fitted.push(k + " #" + el.count);
+      fitted.push(k);
       if (el.count > allowed) places += el.count === allowed + 1 ? 10 : 5;
     }
     if (!fitted.length) continue;
-    let text = seasonDriverName(id) + ": new " + fitted.join(", ");
+    // "new Engine (3 of 4), Turbo (3 of 4)" – the number of the element and the allowance
+    let text = seasonDriverName(id) + ": new " + fitted.map(k => (PU_SHORT_NAMES[k] || k) + " (" + d.pu[k].count + " of " + s.rules.pu[k] + ")").join(", ");
     if (places > 15) {
       d.carryBack = true;
       text += " – starts from the back of the grid";
@@ -172,6 +183,11 @@ function powerUnitsForWeekend(s, round) {
       text += " – " + places + "-place grid penalty";
     }
     lines.push(text);
+    // for the "Weekend arrivals" card: which elements, how many of the allowed ones
+    if (arrivals) {
+      arrivals.push({ kind: "PU", team: d.team, driver: id, back: places > 15, places: places > 15 ? 0 : places,
+        parts: fitted.map(k => ({ k, count: d.pu[k].count, allowed: s.rules.pu[k] })) });
+    }
   }
   return lines;
 }
@@ -190,7 +206,7 @@ function powerUnitsAfterRace(s, round, raceResult) {
     if (!d || !/power unit/i.test(row.reason || "")) continue;
     // a power unit failure destroys one of the main elements
     const keys = Object.keys(d.pu).filter(k => ["ICE", "TC", "MGU-H", "MGU-K"].includes(k));
-    d.pu[keys[hashText(row.id + round.round) % keys.length]].failed = true;
+    d.pu[keys[hashText(row.id + roundSeed(round)) % keys.length]].failed = true;
   }
 }
 
@@ -265,7 +281,7 @@ function developmentAfterRound(s, round, raceResult) {
   for (const t of s.teams) {
     const f = s.finance[t.id];
     const car = s.cars[t.id];
-    const rnd = makeRandom(hashText(s.id + "/dev/" + t.id + "/" + round.round) % 1000000 + 11);
+    const rnd = makeRandom(hashText(s.id + "/dev/" + t.id + "/" + roundSeed(round)) % 1000000 + 11);
 
     // running the team: staff, logistics, parts (~55 % of the cap over the season)
     const fixed = cap * 0.55 / rounds.length;
@@ -308,7 +324,7 @@ function developmentAfterRound(s, round, raceResult) {
 }
 
 // Before a weekend: packages that arrive now are fitted to the car
-function upgradesForWeekend(s, round) {
+function upgradesForWeekend(s, round, arrivals) {
   ensureFinances(s);
   const lines = [];
   for (const t of s.teams) {
@@ -318,9 +334,11 @@ function upgradesForWeekend(s, round) {
       if (p.fitted || p.arrives > round.round) continue;
       p.fitted = round.round;
       car[p.area] = round1(clamp(car[p.area] + p.gain, 30, 110)); // above 100: better than the best car at the start
+      const effect = p.gain > 0.05 ? "WORKS" : p.gain < 0 ? "OFF" : "NOGAIN";
       lines.push(t.name + " bring a " + p.name + " (" + CAR_AREAS[p.area].toLowerCase() + ")" +
-        (p.gain > 0.05 ? "" : p.gain < 0 ? " – it makes the car worse, the team goes back to the old parts" : " – it does not work as expected"));
+        (effect === "WORKS" ? "" : effect === "OFF" ? " – it makes the car worse, the team goes back to the old parts" : " – it does not work as expected"));
       if (p.gain < 0) car[p.area] = round1(car[p.area] - p.gain); // they take it off again
+      if (arrivals) arrivals.push({ kind: "UPGRADE", team: t.id, name: p.name, area: p.area, gain: p.gain, effect });
     }
   }
   return lines;
@@ -349,10 +367,13 @@ function signDriver(s, team, outId, inId, standIn) {
     const used = new Set(Object.values(s.drivers).map(d => d.number));
     let number = driverNumber(inId, s.baseYear);
     while (used.has(number)) number = number + 1 > 99 ? 2 : number + 1;
-    s.drivers[inId] = { id: inId, code: inId, first: c.first, last: c.last, country: c.country, headshot: c.headshot, number,
+    s.drivers[inId] = { id: inId, code: driverCode(inId), first: c.first, last: c.last, country: c.country, headshot: c.headshot, number,
       team: team.id, ratings: driverRatings(inId, s.baseYear), penaltyPoints: 0, reprimands: 0, carryGrid: 0 };
   }
   s.drivers[inId].team = team.id;
+  // the season now also needs the data pack of this driver
+  s.packs = s.packs || [];
+  for (const p of (c && c.packs) || []) if (!s.packs.includes(p)) s.packs.push(p);
   team.drivers = team.drivers.map(id => (id === outId ? inId : id));
   if (standIn) s.drivers[inId].standInFor = outId;
   else if (s.drivers[outId]) s.drivers[outId].team = null;
@@ -364,10 +385,24 @@ function bansForWeekend(s, round) {
   for (const t of s.teams) {
     for (const id of t.drivers.slice()) {
       const d = s.drivers[id];
-      if (!d || !d.banNext) continue;
+      const excluded = d && bannedFromEvents(s, "DRIVER", id, round.round); // excluded from the championship and banned by the FIA
+      const unfit = d && d.unfitUntilRound >= round.round; // not fit after a heavy impact (FIA doctor)
+      if (!d || (!d.banNext && !(d.racesBanned > 0) && !excluded && !unfit)) continue;
       const sub = bestFreeAgent(s);
       if (!sub) continue;
-      d.banNext = false;
+      if (unfit) {
+        signDriver(s, t, id, sub, true);
+        lines.push(seasonDriverName(id) + " is not fit to race (FIA medical delegate) – " + seasonDriverName(sub) + " drives the " + t.name + " this weekend.");
+        continue;
+      }
+      if (excluded) {
+        signDriver(s, t, id, sub, true);
+        lines.push(seasonDriverName(id) + " is banned by the FIA – " + seasonDriverName(sub) + " drives the " + t.name + " this weekend.");
+        continue;
+      }
+      // a race ban of the Stewards (1–3 races, FIA desk) or the penalty points ban
+      if (d.racesBanned > 0) d.racesBanned--;
+      else d.banNext = false;
       d.banServed = round.round;
       signDriver(s, t, id, sub, true);
       lines.push(seasonDriverName(id) + " serves a race ban – " + seasonDriverName(sub) + " drives the " + t.name + " this weekend.");
@@ -379,7 +414,13 @@ function bansForWeekend(s, round) {
 // After a weekend: stand-ins hand the car back, bans are decided, teams change drivers
 function marketAfterRound(s, round) {
   const lines = [];
-  // stand-ins go back to the bench
+  standInsBack(s);
+  return lines.concat(marketDecisions(s, round));
+}
+
+// Stand-ins go back to the bench, the regular drivers get their seats back
+// (after the race – and when the FIA cancels the race of a weekend that has begun)
+function standInsBack(s) {
   for (const t of s.teams) {
     for (const id of t.drivers.slice()) {
       const d = s.drivers[id];
@@ -392,6 +433,10 @@ function marketAfterRound(s, round) {
       }
     }
   }
+}
+
+function marketDecisions(s, round) {
+  const lines = [];
   // race bans: penalty points over the limit (counted again after a ban)
   for (const id in s.drivers) {
     const d = s.drivers[id];
@@ -417,7 +462,7 @@ function marketAfterRound(s, round) {
       const weak = points(a) < points(b) ? a : b;
       const strong = weak === a ? b : a;
       const gap = points(strong) - points(weak);
-      const rnd = makeRandom(hashText(s.id + "/market/" + t.id + "/" + round.round) % 1000000 + 13);
+      const rnd = makeRandom(hashText(s.id + "/market/" + t.id + "/" + roundSeed(round)) % 1000000 + 13);
       if (gap < 40 || points(weak) > points(strong) * 0.25 || rnd() > 0.12) continue;
       if ((s.inbox || []).some(x => x.type === "NOMINATION" && x.status === "PENDING" && x.data.team === t.id)) continue;
       const sub = bestFreeAgent(s);

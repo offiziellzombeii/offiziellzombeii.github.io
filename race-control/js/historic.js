@@ -55,6 +55,7 @@ async function buildHistoricSetup(sessionKey, options, status) {
   const trackData = await loadHistoricTrack(sessionKey, laps, info, pits, raceControl);
   status("Building the track...");
   const track = buildTrack(trackData);
+  applyTrackEdits(track, info.circuit_key); // zones of the track editor (track-editor.js), scaled to this lap
 
   // ----- 2. Driver pace from clean laps -----
   const clean = laps.filter(l => l.lap_duration && l.lap_number > 1 && !l.is_pit_out_lap);
@@ -264,6 +265,7 @@ async function buildHistoricQualifying(info, sessionKey, data, options, status) 
   const trackData = await loadHistoricTrack(sessionKey, laps, info, pits, raceControl);
   status("Building the track...");
   const track = buildTrack(trackData);
+  applyTrackEdits(track, info.circuit_key); // zones of the track editor (track-editor.js), scaled to this lap
 
   // ----- pace: the best lap of every driver -----
   const timed = laps.filter(l => l.lap_duration && !l.is_pit_out_lap);
@@ -443,20 +445,62 @@ function qualiTimeMapper(raceControl) {
 
 // Track shape from the car positions of one clean lap,
 // track length and speed profile from the telemetry of the same lap.
+// How clean is the position data of a lap? repeated = share of points that did not move,
+// jumpShare = share of the lap length covered by single steps much longer than usual
+function trackDataQuality(points) {
+  const steps = [];
+  for (let i = 1; i < points.length; i++) steps.push(Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y));
+  const moving = steps.filter(d => d > 0).sort((a, b) => a - b);
+  const median = moving.length ? moving[Math.floor(moving.length / 2)] : 0;
+  const total = steps.reduce((a, b) => a + b, 0) || 1;
+  const jumps = steps.filter(d => d > median * 4).reduce((a, b) => a + b, 0);
+  return { repeated: steps.filter(d => d === 0).length / Math.max(1, steps.length), jumpShare: jumps / total };
+}
+
 async function loadHistoricTrack(sessionKey, laps, info, pits, raceControl) {
   const good = laps
     .filter(l => l.lap_number > 2 && l.lap_duration && !l.is_pit_out_lap && l.date_start)
     .sort((a, b) => a.lap_duration - b.lap_duration);
-  const lap = good[Math.min(2, good.length - 1)];
-  if (!lap) throw new Error("No clean lap found to draw the track.");
+  if (!good.length) throw new Error("No clean lap found to draw the track.");
 
-  const lapStart = Date.parse(lap.date_start);
-  const window = "&date>=" + isoTime(lapStart) + "&date<" + isoTime(lapStart + lap.lap_duration * 1000);
-  const location = await getData("location", "session_key=" + sessionKey + "&driver_number=" + lap.driver_number + window);
-  const carData = await getData("car_data", "session_key=" + sessionKey + "&driver_number=" + lap.driver_number + window);
+  // Candidates: fast clean laps (from the 3rd fastest on), one per driver.
+  // OpenF1 sometimes has gaps in the position data of a single car, so
+  // if one lap has no positions the next driver's lap is tried.
+  const candidates = [];
+  const usedDrivers = new Set();
+  for (const l of good.slice(Math.min(2, good.length - 1))) {
+    if (usedDrivers.has(l.driver_number)) continue;
+    usedDrivers.add(l.driver_number);
+    candidates.push(l);
+    if (candidates.length >= 5) break;
+  }
 
-  const points = location.filter(p => p.x !== 0 || p.y !== 0).map(p => ({ x: p.x, y: p.y }));
-  if (points.length < 50) throw new Error("Not enough position data to draw the track.");
+  let lap = null;
+  let points = [];
+  let carData = [];
+  for (const candidate of candidates) {
+    const lapStart = Date.parse(candidate.date_start);
+    const window = "&date>=" + isoTime(lapStart) + "&date<" + isoTime(lapStart + candidate.lap_duration * 1000);
+    const location = await getData("location", "session_key=" + sessionKey + "&driver_number=" + candidate.driver_number + window);
+    points = location.filter(p => p.x !== 0 || p.y !== 0).map(p => ({ x: p.x, y: p.y }));
+    if (points.length < 50) {
+      console.warn("Track shape: no position data for car " + candidate.driver_number + " lap " + candidate.lap_number + " – trying another lap");
+      continue;
+    }
+    // a lap with dropouts of the position data (many repeated points, big jumps) gives a shape
+    // with sharp corners that are not there (Hungaroring 2026): try another lap
+    const quality = trackDataQuality(points);
+    if (quality.repeated > 0.1 || quality.jumpShare > 0.08) {
+      console.warn("Track shape: car " + candidate.driver_number + " lap " + candidate.lap_number + " has gaps in the position data (" +
+        Math.round(quality.repeated * 100) + " % repeated points) – trying another lap");
+      points = [];
+      continue;
+    }
+    lap = candidate;
+    carData = await getData("car_data", "session_key=" + sessionKey + "&driver_number=" + candidate.driver_number + window);
+    break;
+  }
+  if (!lap) throw new Error("Not enough position data to draw the track (" + candidates.length + " laps tried).");
 
   // track length = speed integrated over the lap
   let lengthMeters = null;
