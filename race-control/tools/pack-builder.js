@@ -29,7 +29,7 @@ const CORE_CIRCUITS = {
 const GEO_FEATURES = {
   nurburgring: "de-1927", mugello: "it-1914", portimao: "pt-2008", istanbul: "tr-2005", sochi: "ru-2014",
   hockenheimring: "de-1932", ricard: "fr-1969", magny_cours: "fr-1960", sepang: "my-1999", buddh: "in-2011",
-  yeongam: "kr-2010", valencia: "es-2008", indianapolis: "us-1909", fuji: "jp-1966", estoril: "pt-1972",
+  yeongam: "kr-2010", valencia: "va-2008", indianapolis: "us-1909", fuji: "jp-1966", estoril: "pt-1972",
   jerez: "es-1985", adelaide: "au-1985", phoenix: "us-1989", detroit: "us-1982", kyalami: "za-1961"
 };
 
