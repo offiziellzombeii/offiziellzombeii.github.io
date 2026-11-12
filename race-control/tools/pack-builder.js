@@ -14,7 +14,7 @@
 
 const $ = id => document.getElementById(id);
 const JOLPICA = "https://api.jolpi.ca/ergast/f1/";
-const GEOJSON_URL = "https://raw.githubusercontent.com/bacinger/f1-circuits/master/f1-circuits.geojson";
+const GEOJSON_URL = "https://raw.githubusercontent.com/offiziellzombeii/f1-circuits/master/f1-circuits.geojson";
 
 // ---------- Reference tables ----------
 // Jolpica circuit id -> key of the circuit in the built-in pack (OpenF1 circuit key)
